@@ -40,3 +40,10 @@ the key. If it does, the easter-egg is triggered, the message computed and print
 CLI arguments:
 - `-sidedata-key` secret key for Sidedata
 - `-sidedata-val` watermark message for Sidedata
+
+### Number-Theory
+Number-Theory is an implementation from Mila Dalla Preda and Michele Ianni 2024 paper "Exploiting Number Theory for Dynamic Software Watermarking". 
+[doi:10.1007/s11416-023-00489-8](https://doi.org/10.1007/s11416-023-00489-8).
+The technique splits a secret signature S into residues bi = S mod ni for
+pairwise coprime moduli ni and embeds each bi as the value of an integer variable at a chosen iteration of a loop along an execution trace.
+The implementation chooses the ni and bi automatically.
