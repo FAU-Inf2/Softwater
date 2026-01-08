@@ -86,7 +86,7 @@ llvm::PassPluginLibraryInfo getSemaCallPluginInfo() {
                 });
             // this one is needed for clang
             PB.registerPipelineEarlySimplificationEPCallback(
-                [](ModulePassManager &MPM, auto) {
+                [](ModulePassManager &MPM, auto, auto) {
                   MPM.addPass(createModuleToFunctionPassAdaptor(SemaCall()));
                 });
           }};

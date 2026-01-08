@@ -262,7 +262,7 @@ llvmGetPassPluginInfo() {
                   return false;
                 });
             PB.registerPipelineEarlySimplificationEPCallback(
-                [](ModulePassManager &MPM, auto) {
+                [](ModulePassManager &MPM, auto, auto) {
                   MPM.addPass(
                       createModuleToFunctionPassAdaptor(LoopSimplifyPass()));
                   MPM.addPass(createModuleToFunctionPassAdaptor(
