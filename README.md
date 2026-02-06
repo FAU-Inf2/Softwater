@@ -42,8 +42,28 @@ CLI arguments:
 - `-sidedata-val` watermark message for Sidedata
 
 ### Number-Theory
-Number-Theory is an implementation from Mila Dalla Preda and Michele Ianni 2024 paper "Exploiting Number Theory for Dynamic Software Watermarking". 
+Number-Theory is an implementation from Mila Dalla Preda and Michele Ianni's 2024 paper "Exploiting Number Theory for Dynamic Software Watermarking". 
 [doi:10.1007/s11416-023-00489-8](https://doi.org/10.1007/s11416-023-00489-8).
 The technique splits a secret signature S into residues bi = S mod ni for
 pairwise coprime moduli ni and embeds each bi as the value of an integer variable at a chosen iteration of a loop along an execution trace.
 The implementation chooses the ni and bi automatically.
+This implementation uses LLVM's loop analyses to automatically choose suitable loops to embed the watermark
+without the need of symbolic execution.
+
+### RPGMark
+RPG-Mark is an implementation from Maria Chroni and Stavros D. Nikolopoulos's 2012 paper "An Embedding Graph-based Model for
+Software Watermarking" [doi:10.1109/IIH-MSP.2012.69](https://doi.org/10.1109/IIH-MSP.2012.69).
+It constructs the static call-graph from a function.
+The watermark message is encoded in a self-inverting permutation.
+The domination relation in this permutation allows to construct a reducible permutation graph (RPG).
+The RPG is introduced as an subgraph of the call-graph. The nodes are mapped to specific functions.
+Missing edges are inserted by introducing synthetic calls as opaque-predicates.
+Our implementation constructs the following types of opaque-predicates:
+- semantic call predicates that adapt the idea of SemaCall to use semantic knowledge of library functions to construct an "always true"
+  or "always false" expression. e.g. `if time() == 0 then ... fi`.
+- CLI argument number predicate that checks for an unrealistic value of the `argn` parameter passed as a first parameter to the main function
+  of a program.
+The extraction proves the presence of a message by constructing its RPG and showing that it is a subgraph of the given program.
+This differs from the WaterRPG approach of Novac et al. that use a dynamic call-graph as a trace of the program execution.
+While one can argue that this approach is more resilient, it requires program execution to embed the watermark, rendering
+automatic embedding and extraction more difficult.
