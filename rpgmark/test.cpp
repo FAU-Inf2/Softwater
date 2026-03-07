@@ -1,4 +1,5 @@
 #include "acutest.h"
+#include "rpg.hpp"
 #include "sip.hpp"
 using namespace std;
 template <typename T> static string vec2str(vector<T> vec) {
@@ -60,9 +61,17 @@ void sip_encode_decode() {
     TEST_MSG("'%s' -> encode -> decode -> %s", t2, actual.c_str());
   }
 }
+void rpg_encode_decode() {
+  auto s1 = SIP::encode("AB");
+  auto r1 = RPG::from_sip(s1);
+  auto s2 = RPG::to_sip(r1);
+  TEST_CHECK(s1 == s2);
+  TEST_MSG("%s -> encode -> decode -> %s", vec2str(s1).c_str(), vec2str(s2).c_str());
+}
 TEST_LIST = {
     {"SIP Encoding Example", sip_example},
     {"SIP Properties", sip_is_sip},
     {"SIP Encoding/Decoding", sip_encode_decode},
+    {"RPG Encoding/Decoding", rpg_encode_decode},
     {NULL, NULL} /* zeroed record marking the end of the list */
 };
