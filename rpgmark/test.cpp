@@ -62,11 +62,11 @@ void sip_encode_decode() {
   }
 }
 void rpg_encode_decode() {
-  auto s1 = SIP::encode("AB");
-  auto r1 = RPG::from_sip(s1);
-  auto s2 = RPG::to_sip(r1);
-  TEST_CHECK(s1 == s2);
-  TEST_MSG("%s -> encode -> decode -> %s", vec2str(s1).c_str(), vec2str(s2).c_str());
+  for (string s : {"Hello World", "A213%63]", "FAU", "aslkdjaiusdhuwqjb!@#&@dkjqdiuashkasj213dq", "A"}) {
+    string r = SIP::decode_string(RPG::to_sip(RPG::from_sip(SIP::encode(s))));
+  TEST_CHECK(s == r);
+  TEST_MSG("%s -> encode -> decode -> %s", s.c_str(), r.c_str());
+  }
 }
 TEST_LIST = {
     {"SIP Encoding Example", sip_example},

@@ -1,6 +1,5 @@
 #include "rpg.hpp"
 #include <cassert>
-#include <cstdio>
 #include <sys/types.h>
 using namespace std;
 static bool dominates(std::vector<uint32_t> invsip, int i, int j) {
@@ -51,16 +50,16 @@ RPG RPG::from_sip(const std::vector<uint32_t> &sip) {
   // add source and sink
   for (int i = 0; i < sip.size(); i++) {
     int in = 0, out = 0;
-    for (int j = 0; j < i; j++) {
-      if (dag.adjacency[i][j])
+    for (int j = 0; j < sip.size(); j++) {
+      if (dag.adjacency[i + 1][j + 1])
         out++;
-      if (dag.adjacency[j][i])
+      if (dag.adjacency[j + 1][i + 1])
         in++;
     }
     if (!in)
-      dag.adjacency[source][i] = true;
+      dag.adjacency[source][i + 1] = true;
     if (!out)
-      dag.adjacency[i][sink] = true;
+      dag.adjacency[i + 1][sink] = true;
   }
   // maximum labeled predecessor
   vector<uint32_t> p(total, -1);
@@ -90,6 +89,7 @@ RPG RPG::from_sip(const std::vector<uint32_t> &sip) {
 }
 static int dfs(RPG &rpg, vector<int> &discovery, int current, int depth) {
   discovery[current] = depth++;
+  // visit children in minimum-labeled order (ascending index order)
   for (int c = 0; c < rpg.adjacency.size(); c++) {
     if (rpg.adjacency[current][c] && discovery[c] == 0) {
       depth = dfs(rpg, discovery, c, depth);
@@ -98,20 +98,23 @@ static int dfs(RPG &rpg, vector<int> &discovery, int current, int depth) {
   return depth;
 }
 static void dfs(RPG &rpg, vector<int> &discovery) {
-  // find root
-  int depth = 1;
+  // Find the root node (node with indegree 0)
+  int root = -1;
   for (int i = 1; i < rpg.adjacency.size(); i++) {
-    bool is_root = true;
-    for (int j = 1; j < rpg.adjacency.size(); j++) {
-      if (i != j && rpg.adjacency[j][i]) {
-        is_root = false;
+    int indeg = 0;
+    for (int j = 0; j < rpg.adjacency.size(); j++) {
+      if (rpg.adjacency[j][i]) {
+        indeg++;
         break;
       }
     }
-    if (discovery[i] == 0) {
-      printf("ROOT: %d\n", i);
-      depth = dfs(rpg, discovery, i, depth);
+    if (indeg == 0) {
+      root = i;
+      break;
     }
+  }
+  if (root >= 0) {
+    dfs(rpg, discovery, root, 1);
   }
 }
 std::vector<uint32_t> RPG::to_sip(RPG rpg) {
@@ -132,11 +135,15 @@ std::vector<uint32_t> RPG::to_sip(RPG rpg) {
   }
   vector<int> discovery(rpg.adjacency.size(), 0);
   dfs(rpg, discovery);
-  vector<uint32_t> sip(discovery.size() - 1);
-  for (int i = 1; i < discovery.size(); i++) {
-    if (discovery[i] == 0)
-      printf("Broken at %d\n", i);
-    sip[discovery[i] - 1] = i - 1;
+
+  // Build SIP from discovery times, excluding s
+  int n = rpg.adjacency.size() - 2;
+  vector<uint32_t> sip(n);
+  for (int i = 1; i <= n; i++) {
+    // skip s and shift everything else down
+    if (discovery[i] > 1) {
+      sip[discovery[i] - 2] = i - 1; // -2 to skip s, -1 for SIP values
+    }
   }
   return sip;
 }
