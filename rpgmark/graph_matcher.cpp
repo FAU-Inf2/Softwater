@@ -1,4 +1,5 @@
 #include "graph_matcher.hpp"
+#include <llvm/Analysis/CallGraph.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <queue>
@@ -94,18 +95,47 @@ vector<Function *> GraphMatcher::match(CallGraph &cg, RPG &rpg) {
   }
   return ass;
 }
-void GraphMatcher::createMissingFunctions(llvm::Module& m, std::vector<llvm::Function *>& match) {
+void GraphMatcher::createMissingFunctions(
+    llvm::Module &m, std::vector<llvm::Function *> &match) {
   for (int i = 0; i < match.size(); i++) {
     if (!match[i]) {
       // select a random function
       int selind = rand() % m.size();
       auto it = m.begin();
-      for (int i = 0; i < selind; i++) it++;
-      Function& toclone = *it;
+      for (int i = 0; i < selind; i++)
+        it++;
+      Function &toclone = *it;
       ValueToValueMapTy v2vm;
-      Function* cloned = llvm::CloneFunction(&toclone, v2vm, nullptr);
+      Function *cloned = llvm::CloneFunction(&toclone, v2vm, nullptr);
       match[i] = cloned;
     }
   }
 }
 
+static void insertOpaqueCall(Function* caller, Function* callee) {
+
+}
+
+void GraphMatcher::createMissingEdges(llvm::Module &m, CallGraph &cg, RPG &rpg,
+                                      std::vector<llvm::Function *> &match) {
+  for (int i = 0; i < rpg.adjacency.size(); i++) {
+    for (int j = 0; j < rpg.adjacency.size(); j++) {
+      if (rpg.adjacency[i][j]) {
+        // expect: call from i to j
+        Function* fi = match[i];
+        Function* fj = match[j];
+        bool found = false;
+        for (auto& succ_fi : *cg[fi]) {
+          if (succ_fi.second->getFunction() == fj) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          // insert opaque predicate with call to fj in fi
+          insertOpaqueCall(fi, fj);
+        }
+      }
+    }
+  }
+}

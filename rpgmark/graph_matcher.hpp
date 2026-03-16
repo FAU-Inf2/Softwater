@@ -14,7 +14,15 @@ namespace GraphMatcher {
  */
 std::vector<llvm::Function *> match(llvm::CallGraph &cg, RPG &rpg);
 /**
- * For each node which has no function assigned to it, generates a new function by copying an existing one.
+ * For each node which has no function assigned to it, generates a new function
+ * by copying an existing one.
  */
-void createMissingFunctions(llvm::Module& m, std::vector<llvm::Function *>& match);
+void createMissingFunctions(llvm::Module &m,
+                            std::vector<llvm::Function *> &match);
+/**
+ * Adds opaque predicates with calls to random basic blocks in the functions to
+ * add edges missing in the call graph that are present in the RPG.
+ */
+void createMissingEdges(llvm::Module &m, llvm::CallGraph &cg, RPG &rpg,
+                        std::vector<llvm::Function *> &match);
 } // namespace GraphMatcher
