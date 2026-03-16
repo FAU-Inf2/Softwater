@@ -2,6 +2,7 @@
 #include "rpg.hpp"
 #include "sip.hpp"
 #include <llvm/Analysis/CallGraph.h>
+#include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
@@ -32,22 +33,22 @@ struct RPGMark : public PassInfoMixin<RPGMark> {
     // TODO add missing nodes
     llvm::errs() << "Mapped " << num_nonnull << " / " << mapping.size()
                  << " with " << total_funs << " functions\n";
+    llvm::errs() << "embedded watermark 1 times\n";
     return PreservedAnalyses::none();
   }
 };
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
-  return {
-      LLVM_PLUGIN_API_VERSION, "semacall-watermark", LLVM_VERSION_STRING,
-      [](PassBuilder &PB) {
-        PB.registerPipelineParsingCallback(
-            [](auto, ModulePassManager &MPM, auto) {
-              MPM.addPass(RPGMark());
-              return true;
-            });
-        // this one is needed for clang
-        PB.registerPipelineEarlySimplificationEPCallback(
-            [](ModulePassManager &MPM, auto, auto) { MPM.addPass(RPGMark()); });
-      }};
+  return {LLVM_PLUGIN_API_VERSION, "rpgmark-watermark", LLVM_VERSION_STRING,
+          [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](auto, ModulePassManager &MPM, auto) {
+                  MPM.addPass(RPGMark());
+                  return true;
+                });
+            // this one is needed for clang
+            PB.registerPipelineEarlySimplificationEPCallback(
+                [](ModulePassManager &MPM, auto) { MPM.addPass(RPGMark()); });
+          }};
 }
