@@ -1,11 +1,13 @@
 #include "graph_matcher.hpp"
 #include <llvm/Analysis/CallGraph.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <queue>
+#include <stdexcept>
 #include <unordered_set>
 using namespace std;
 using namespace llvm;
@@ -59,6 +61,7 @@ vector<Function *> GraphMatcher::match(CallGraph &cg, RPG &rpg) {
     for (Function &f : cg.getModule()) {
       if (f.hasExactDefinition() &&
           already_assigned.find(&f) == already_assigned.end()) {
+        f.addFnAttr(Attribute::NoInline);
         int wrong_in = 0, wrong_out = 0;
         CallGraphNode *node = cg[&f];
         unordered_set<Function *> incoming_func;
@@ -67,6 +70,7 @@ vector<Function *> GraphMatcher::match(CallGraph &cg, RPG &rpg) {
           outgoing_func.insert(succ->getFunction());
         }
         for (Function &p : cg.getModule()) {
+          p.addFnAttr(Attribute::NoInline);
           for (auto [_, p_succ] : *cg[&p]) {
             if (p_succ->getFunction() == &f)
               incoming_func.insert(&p);
@@ -103,64 +107,27 @@ void GraphMatcher::createMissingFunctions(
   for (int i = 0; i < match.size(); i++) {
     if (!match[i]) {
       // select a random function
-      int selind = rand() % m.size();
-      auto it = m.begin();
-      for (int i = 0; i < selind; i++)
-        it++;
-      Function &toclone = *it;
+      Function *toclone = nullptr;
+      while (true) {
+        int selind = rand() % m.size();
+        auto it = m.begin();
+        for (int i = 1; i < selind; i++)
+          it++;
+        toclone = &*it;
+        if (toclone->hasExactDefinition())
+          break;
+      }
       ValueToValueMapTy v2vm;
-      Function *cloned = llvm::CloneFunction(&toclone, v2vm, nullptr);
+      Function *cloned = llvm::CloneFunction(toclone, v2vm, nullptr);
+      cloned->addFnAttr(Attribute::NoInline);
       match[i] = cloned;
     }
   }
 }
 
-/**
- * For when the instruction from a basic block is transplanted from the
- * original block `orig` to a new block `jump`. Adapts the PHI nodes for all
- * other basic blocks s.t. they point to the new `jump` block if they had
- * `orig` as predecessor.
- */
-static void adaptPHINodes(llvm::Instruction *lastInstr, llvm::BasicBlock *orig,
-                          llvm::BasicBlock *jump) {
-  using namespace llvm;
-  if (isa<BranchInst>(lastInstr)) {
-    BranchInst *br = (BranchInst *)lastInstr;
-    for (uint i = 0; i < br->getNumSuccessors(); i++) {
-      BasicBlock *succ = br->getSuccessor(i);
-      for (llvm::Instruction &instr : *succ) {
-        if (isa<PHINode>(instr)) {
-          PHINode &phi = (PHINode &)(instr);
-          for (uint j = 0; j < phi.getNumIncomingValues(); j++) {
-            if (phi.getIncomingBlock(j) == orig) {
-              phi.setIncomingBlock(j, jump);
-            }
-          }
-        }
-      }
-    }
-  } else if (isa<SwitchInst>(lastInstr)) {
-    SwitchInst *sw = (SwitchInst *)lastInstr;
-    std::vector<BasicBlock *> targets = {sw->getDefaultDest()};
-    for (auto c : sw->cases())
-      targets.push_back(c.getCaseSuccessor());
-    for (BasicBlock *succ : targets) {
-      for (llvm::Instruction &instr : *succ) {
-        if (isa<PHINode>(instr)) {
-          PHINode &phi = (PHINode &)(instr);
-          for (uint j = 0; j < phi.getNumIncomingValues(); j++) {
-            if (phi.getIncomingBlock(j) == orig) {
-              phi.setIncomingBlock(j, jump);
-            }
-          }
-        }
-      }
-    }
-  }
-}
 /** Creates a call to callee in a random basic block in caller, protected by a
  * opaque predicate on time */
-static void insertOpaqueCall(Function *caller, Function *callee) {
+void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
   // choose random basic block
   BasicBlock *orig = &*caller->begin();
   {
@@ -171,7 +138,9 @@ static void insertOpaqueCall(Function *caller, Function *callee) {
     }
   }
   // add new block with original instructions (split)
-  BasicBlock *split = BasicBlock::Create(caller->getContext());
+  BasicBlock *split = BasicBlock::Create(caller->getContext(), "split");
+  caller->insert(caller->end(), split); 
+  orig->replaceSuccessorsPhiUsesWith(split);
   {
     // keep phis in original block (orig), split afterwards (to split)
     auto it = orig->begin();
@@ -180,10 +149,11 @@ static void insertOpaqueCall(Function *caller, Function *callee) {
         break;
       }
     }
-    split->splice(split->end(), orig, it);
+    split->splice(split->end(), orig, it, orig->end());
   }
   // add new block with opaque call (opaque)
-  BasicBlock *opaque = BasicBlock::Create(caller->getContext());
+  BasicBlock *opaque = BasicBlock::Create(caller->getContext(), "opaque");
+  caller->insert(caller->end(), opaque); 
   {
     IRBuilder<> opaqueBuild(opaque);
     // think of some params
@@ -205,15 +175,12 @@ static void insertOpaqueCall(Function *caller, Function *callee) {
     FunctionType *fType =
         FunctionType::get(Type::getInt64Ty(mod->getContext()), params, false);
     FunctionCallee timeFunc = mod->getOrInsertFunction("time", fType);
-    Value *timeVal = origBuild.CreateCall(timeFunc, {nullptr});
+    Value *timeVal = origBuild.CreateCall(timeFunc, {Constant::getNullValue(params[0])});
     Value *pred = origBuild.CreateCmp(
         CmpInst::Predicate::ICMP_SGT, timeVal,
         ConstantInt::get(Type::getInt64Ty(mod->getContext()), rand() % 10000));
     origBuild.CreateCondBr(pred, split, opaque);
   }
-  // adapt phi nodes: all original successors of orig have as predecessor now
-  // split
-  adaptPHINodes(&*--split->end(), orig, split);
 }
 
 void GraphMatcher::createMissingEdges(llvm::Module &m, CallGraph &cg, RPG &rpg,

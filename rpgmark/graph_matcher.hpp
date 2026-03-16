@@ -25,4 +25,7 @@ void createMissingFunctions(llvm::Module &m,
  */
 void createMissingEdges(llvm::Module &m, llvm::CallGraph &cg, RPG &rpg,
                         std::vector<llvm::Function *> &match);
+/** Creates a call to callee in a random basic block in caller, protected by a
+ * opaque predicate on time */
+void insertOpaqueCall(llvm::Function *caller, llvm::Function *callee);
 } // namespace GraphMatcher
