@@ -57,13 +57,21 @@ It constructs the static call-graph from a function.
 The watermark message is encoded in a self-inverting permutation.
 The domination relation in this permutation allows to construct a reducible permutation graph (RPG).
 The RPG is introduced as an subgraph of the call-graph. The nodes are mapped to specific functions.
+For nodes that could not be mapped to a function (e.g. because there are too few functions), an existing function is cloned and assigned. 
 Missing edges are inserted by introducing synthetic calls as opaque-predicates.
 Our implementation constructs the following types of opaque-predicates:
-- semantic call predicates that adapt the idea of SemaCall to use semantic knowledge of library functions to construct an "always true"
+Semantic call predicates that adapt the idea of SemaCall to use semantic knowledge of library functions to construct an "always true"
   or "always false" expression. e.g. `if time() == 0 then ... fi`.
-- CLI argument number predicate that checks for an unrealistic value of the `argn` parameter passed as a first parameter to the main function
-  of a program.
 The extraction proves the presence of a message by constructing its RPG and showing that it is a subgraph of the given program.
-This differs from the WaterRPG approach of Novac et al. that use a dynamic call-graph as a trace of the program execution.
+
+This implementation differs from the WaterRPG approach of Novac et al. that use a dynamic call-graph as a trace of the program execution.
 While one can argue that this approach is more resilient, it requires program execution to embed the watermark, rendering
 automatic embedding and extraction more difficult.
+It also differs from the WaterRPG approach of Chionis et al. [doi:10.1145/2491845.2491874](https://doi.org/10.1145/2491845.2491874) that 
+only works for Java programs that have enough functions. They introduce data-dependencies through variables of the functions, while our 
+opaque predicates leverage the side-effects of semantically known functions (see SemaCall) to construct opaque predicates.
+Their extraction requires the secret input, while ours works statically with the message.
+This implementation, therefore, is more practice oriented and works on arbitrary programs automatically with minimal manual effort.
+
+CLI arguments:
+- `rpg-message` watermark message as a string
