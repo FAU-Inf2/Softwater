@@ -5,6 +5,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <queue>
 #include <stdexcept>
@@ -61,6 +62,9 @@ vector<Function *> GraphMatcher::match(CallGraph &cg, RPG &rpg) {
     for (Function &f : cg.getModule()) {
       if (f.hasExactDefinition() &&
           already_assigned.find(&f) == already_assigned.end()) {
+        if (f.hasFnAttribute(Attribute::AlwaysInline)) {
+          f.removeFnAttr(Attribute::AlwaysInline);
+        }
         f.addFnAttr(Attribute::NoInline);
         int wrong_in = 0, wrong_out = 0;
         CallGraphNode *node = cg[&f];
@@ -70,6 +74,9 @@ vector<Function *> GraphMatcher::match(CallGraph &cg, RPG &rpg) {
           outgoing_func.insert(succ->getFunction());
         }
         for (Function &p : cg.getModule()) {
+          if (p.hasFnAttribute(Attribute::AlwaysInline)) {
+            p.removeFnAttr(Attribute::AlwaysInline);
+          }
           p.addFnAttr(Attribute::NoInline);
           for (auto [_, p_succ] : *cg[&p]) {
             if (p_succ->getFunction() == &f)
@@ -119,6 +126,9 @@ void GraphMatcher::createMissingFunctions(
       }
       ValueToValueMapTy v2vm;
       Function *cloned = llvm::CloneFunction(toclone, v2vm, nullptr);
+      if (cloned->hasFnAttribute(Attribute::AlwaysInline)) {
+        cloned->removeFnAttr(Attribute::AlwaysInline);
+      }
       cloned->addFnAttr(Attribute::NoInline);
       match[i] = cloned;
     }
@@ -128,7 +138,7 @@ void GraphMatcher::createMissingFunctions(
 /** Creates a call to callee in a random basic block in caller, protected by a
  * opaque predicate on time */
 void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
-  // choose random basic block
+  // choose random basic block with normal jump
   BasicBlock *orig = &*caller->begin();
   {
     int bbi = rand() % caller->size();
@@ -139,13 +149,13 @@ void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
   }
   // add new block with original instructions (split)
   BasicBlock *split = BasicBlock::Create(caller->getContext(), "split");
-  caller->insert(caller->end(), split); 
+  caller->insert(caller->end(), split);
   orig->replaceSuccessorsPhiUsesWith(split);
   {
     // keep phis in original block (orig), split afterwards (to split)
     auto it = orig->begin();
     for (; it != orig->end(); it++) {
-      if (!isa<PHINode>(&*it)) {
+      if (!isa<PHINode>(&*it) && !isa<LandingPadInst>(&*it)) {
         break;
       }
     }
@@ -153,7 +163,7 @@ void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
   }
   // add new block with opaque call (opaque)
   BasicBlock *opaque = BasicBlock::Create(caller->getContext(), "opaque");
-  caller->insert(caller->end(), opaque); 
+  caller->insert(caller->end(), opaque);
   {
     IRBuilder<> opaqueBuild(opaque);
     // think of some params
@@ -175,12 +185,15 @@ void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
     FunctionType *fType =
         FunctionType::get(Type::getInt64Ty(mod->getContext()), params, false);
     FunctionCallee timeFunc = mod->getOrInsertFunction("time", fType);
-    Value *timeVal = origBuild.CreateCall(timeFunc, {Constant::getNullValue(params[0])});
+    Value *timeVal =
+        origBuild.CreateCall(timeFunc, {Constant::getNullValue(params[0])});
     Value *pred = origBuild.CreateCmp(
         CmpInst::Predicate::ICMP_SGT, timeVal,
         ConstantInt::get(Type::getInt64Ty(mod->getContext()), rand() % 10000));
     origBuild.CreateCondBr(pred, split, opaque);
   }
+  if (verifyFunction(*caller, &errs()))
+    throw std::runtime_error("");
 }
 
 void GraphMatcher::createMissingEdges(llvm::Module &m, CallGraph &cg, RPG &rpg,
@@ -205,4 +218,6 @@ void GraphMatcher::createMissingEdges(llvm::Module &m, CallGraph &cg, RPG &rpg,
       }
     }
   }
+  if (verifyModule(m, &errs()))
+    throw std::runtime_error("");
 }

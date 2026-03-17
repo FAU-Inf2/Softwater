@@ -4,6 +4,7 @@
 #include <llvm/Analysis/CallGraph.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/PassPlugin.h>
 #include <llvm/Support/CommandLine.h>
@@ -68,7 +69,7 @@ struct RPGMark : public PassInfoMixin<RPGMark> {
             for (int i = 0; i < ridx; i++)
               rit++;
             caller = *rit;
-            if (caller->hasExactDefinition()) break;
+            if (caller && caller->hasExactDefinition()) break;
           }
           // add opaque call
           GraphMatcher::insertOpaqueCall(caller, &f);
@@ -79,6 +80,7 @@ struct RPGMark : public PassInfoMixin<RPGMark> {
       }
     }
     delete cg;
+    verifyModule(M, &errs());
     return PreservedAnalyses::none();
   }
 };
@@ -87,13 +89,11 @@ extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, "rpgmark-watermark", LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](auto, ModulePassManager &MPM, auto) {
+            PB.registerOptimizerLastEPCallback(
+                [](ModulePassManager &MPM, auto, auto) {
                   MPM.addPass(RPGMark());
                   return true;
                 });
             // this one is needed for clang
-            PB.registerPipelineEarlySimplificationEPCallback(
-                [](ModulePassManager &MPM, auto) { MPM.addPass(RPGMark()); });
           }};
 }
