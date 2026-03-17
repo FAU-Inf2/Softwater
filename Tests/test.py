@@ -21,12 +21,12 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--c-compiler",
     help="Defines the command to compile C code files to LLVM IR. Use the [input] and [output] makros as placeholders for the input and output filename",
-    default="clang -emit-llvm -O1 -c [input] -o [output]",
+    default="clang -Wno-implicit-int -Wno-implicit-function-declaration -emit-llvm -O1 -c [input] -o [output]",
 )
 parser.add_argument(
     "--cpp-compiler",
     help="Defines the command to compile C++ code files to LLVM IR. Use the [input] and [output] makros as placeholders for the input and output filename",
-    default="clang++ -emit-llvm -O1 -c [input] -o [output]",
+    default="clang++ --std=c++2a -Wno-narrowing -emit-llvm -O1 -c [input] -o [output]",
 )
 parser.add_argument(
     "--optimize",
@@ -41,7 +41,7 @@ parser.add_argument(
 parser.add_argument(
     "--compile",
     help="Defines the command to compile the LLVM IR. Use the [input] and [output] makros as placeholders for the input and output filename",
-    default="clang++ [input] -o [output] -O1",
+    default="clang++ [input] -o [output] -O1 -lm",
 )
 parser.add_argument(
     "-t",
@@ -271,7 +271,7 @@ if args.test:
                 print(f"PASS {rel_name}")
             else:
                 failed_count += 1
-                print(f"FAIL {rel_name}, log: {embedding_log}")
+                print(f"FAIL {rel_name}", "output differs" if actual_output != expected_output else ("exit differs" if actual_exit != expected_exit else "build error"))
 
     conn.close()
     print(f"Finished test run '{run_name}': {passed_count} passed, {failed_count} failed, {passed_count + failed_count} total")

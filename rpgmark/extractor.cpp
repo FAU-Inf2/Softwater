@@ -150,6 +150,10 @@ vector<vector<bool>> parse_call_graph(string path) {
 }
 
 int main(int argc, char **argv) {
+  if (argc < 3) {
+    printf("Usage: %s <binary> <message>\nDetects if the call graph of the binary includes the message encoded as an RPG\n", argv[0]);
+    exit(1);
+  }
   auto cg = parse_call_graph(argv[1]);
   string msg = argv[2];
   RPG rpg = RPG::from_sip(SIP::encode(msg));
