@@ -131,7 +131,7 @@ vector<vector<bool>> parse_call_graph(string path) {
   for (string line : lines) {
     smatch func_match;
     if (regex_search(line, func_match, func_decl)) {
-      current_func = func_numbering[func_match[2]];
+      current_func = func_numbering[func_match[1]];
     } else {
       smatch call_match;
       if (current_func >= 0 && regex_search(line, call_match, call_inst)) {

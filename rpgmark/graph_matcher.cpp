@@ -135,18 +135,11 @@ void GraphMatcher::createMissingFunctions(
   }
 }
 
-/** Creates a call to callee in a random basic block in caller, protected by a
- * opaque predicate on time */
+/** Creates a call to callee in caller, protected by an opaque predicate on
+ * time. The insertion is anchored in the entry block so optimization passes
+ * cannot drop it as dead code. */
 void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
-  // choose random basic block with normal jump
-  BasicBlock *orig = &*caller->begin();
-  {
-    int bbi = rand() % caller->size();
-    auto it = caller->begin();
-    for (int i = 0; i < bbi; i++) {
-      orig = &*(++it);
-    }
-  }
+  BasicBlock *orig = &caller->getEntryBlock();
   // add new block with original instructions (split)
   BasicBlock *split = BasicBlock::Create(caller->getContext(), "split");
   caller->insert(caller->end(), split);
