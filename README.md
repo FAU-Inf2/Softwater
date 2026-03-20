@@ -19,6 +19,12 @@ clang -fpass-plugin=/path/to/plugin.so test.c -O1
 ```
 Special CLI arguments needed for the watermark techniques are listed below.
 
+## Testing
+All Tests are run in the `Tests/` folder.
+There is a documented python script to test watermarks and benchmark them.
+Each watermark folder contains an individual Test script `test.sh` that has to be run
+in the Tests folder to execute all unit tests with that watermark.
+
 ## Watermark Techniques
 ### SemaCall
 SemaCall uses semantically known function calls to embed the watermark as a key-to-value function.

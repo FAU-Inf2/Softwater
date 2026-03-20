@@ -21,6 +21,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/raw_ostream.h"
 #include "includes/LoopAnalysis.cpp"
 #include "includes/LoopInsertion.cpp"
@@ -51,28 +52,46 @@
 using namespace llvm;
 using namespace std;
 
+// CLI options for user-provided signature
+static cl::opt<long long> NumberTheorySignature(
+    "nt-signature",
+    cl::desc("Specify the watermark signature (integer) to embed. If not "
+             "provided, a random signature will be generated."),
+    cl::value_desc("signature"), cl::init(-1));
+
+static cl::opt<std::string> NumberTheoryKeyFile(
+    "nt-keyfile",
+    cl::desc("Specify the output path for the watermark key file."),
+    cl::value_desc("keyfile"), cl::init("key.txt"));
+
 namespace {
 
 /**
- * @brief Writes key.txt file from the obtaines watermark-embedding results
+ * @brief Writes key file from the obtained watermark-embedding results
  * @param keys vector of insertion-points <line1, column1, iterations, wm_name,
- * expected_wm_value, line2, column2>
+ * expected_wm_value>
+ * @param signature the embedded signature S
+ * @param keyFilePath path to the key file
  */
 void createKeyTxt(
-    std::vector<std::tuple<int, int, int, std::string, int>> keys) {
+    std::vector<std::tuple<int, int, int, std::string, int>> keys,
+    long long signature, const std::string &keyFilePath) {
 
-  std::ofstream outFile("key.txt");
+  std::ofstream outFile(keyFilePath);
 
   if (outFile.is_open()) {
+    // First line: signature
+    outFile << "# signature=" << signature << '\n';
+    // Following lines: breakpoint info
     for (const auto &key : keys) {
       outFile << std::get<0>(key) << ' ' << std::get<1>(key) << ' '
               << std::get<2>(key) << ' ' << std::get<3>(key) << ' '
               << std::get<4>(key) << '\n';
     }
     outFile.close();
-    errs() << "Data written to key.txt successfully." << endl << endl;
+    errs() << "Data written to " << keyFilePath << " successfully." << endl << endl;
   } else {
-    errs() << "ABORT: Unable to open file for writing." << endl;
+    errs() << "ABORT: Unable to open file for writing: " << keyFilePath << endl;
     exit(1);
   }
 }
@@ -173,8 +192,8 @@ struct WatermarkEmbedderPass : public PassInfoMixin<WatermarkEmbedderPass> {
     errs() << max_insertions << " insertion point(s)" << endl << endl;
     ;
 
-    // Generate Watermark Variables
-    Watermark watermark = generateWatermark(max_insertions);
+    // Generate Watermark Variables (use user-provided signature if available)
+    Watermark watermark = generateWatermark(max_insertions, NumberTheorySignature);
 
     // get the first [max_insertions] loops of sorted_loops
     vector<Loop *> selected_loops;
@@ -238,8 +257,10 @@ struct WatermarkEmbedderPass : public PassInfoMixin<WatermarkEmbedderPass> {
       wm_counter = wm_counter + 1;
     } // END for loop in loops
 
-    // write key.txt file
-    createKeyTxt(keys);
+    // write key file
+    createKeyTxt(keys, watermark.S, NumberTheoryKeyFile);
+
+    errs() << "Embedded watermark " << keys.size() << " times.\n";
 
     // changes to the IR -> Analyses are potentially invalidated -> none()
     return PreservedAnalyses::none();

@@ -118,12 +118,12 @@ Prime numbers generated for number of insertion points / loops." << "\n";
 }*/
 
 /**
- * @brief process for randomly generating a CRT watermark: ni, S, bi (S modulo
- * ni = bi)
+ * @brief process for generating a CRT watermark: ni, S, bi (S modulo ni = bi)
  * @param loop_count number of loops -> number of watermark parts ni
+ * @param user_signature optional user-provided signature (-1 means generate randomly)
  * @return calculated Watermark
  */
-Watermark generateWatermark(int loop_count) {
+Watermark generateWatermark(int loop_count, long long user_signature = -1) {
   errs() << "Generate Watermark:" << "\n";
 
   vector<int> ni = generatePrimes(loop_count);
@@ -133,15 +133,28 @@ Watermark generateWatermark(int loop_count) {
   for (int n : ni) {
     N *= n;
   }
-  // N overflows
   errs() << "Generated primes, N = " << N << "\n";
 
-  // Select 1 <= S < N
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<long> dist(1, N - 1);
-  int S = dist(gen) % INT_MAX;
-  errs() << "Generated distr " << "\n";
+  // Select S: use user-provided or generate randomly
+  long long S;
+  if (user_signature >= 0) {
+    // User provided signature - validate it fits
+    if ((unsigned long long)user_signature >= N) {
+      errs() << "WARNING: Provided signature " << user_signature
+             << " is >= N (" << N << "). Using S = signature mod N.\n";
+      S = user_signature % N;
+    } else {
+      S = user_signature;
+    }
+    errs() << "Using user-provided signature S = " << S << "\n";
+  } else {
+    // Generate random signature
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<long> dist(1, N - 1);
+    S = dist(gen) % INT_MAX;
+    errs() << "Generated random signature S = " << S << "\n";
+  }
 
   // calc bi for each ni
   map<int, int> n_to_b;
@@ -155,7 +168,7 @@ Watermark generateWatermark(int loop_count) {
   watermark.S = S;
   watermark.N = N;
   watermark.n_to_b = n_to_b;
-  errs() << "Generated water" << "\n";
+  errs() << "Generated watermark" << "\n";
   printWatermark(watermark);
 
   return watermark;

@@ -267,24 +267,52 @@ DILocation *insertWMInLoop(int b, int iteration, Loop *L, Function &F,
   // Get Loop Predecessor
   static LLVMContext Context;
 
-  // Get Breakpoint Locarion from !dbg of branch instruction in loop latch
-  auto latch = L->getLoopLatch();
-  Instruction *LastInst = &latch->back();
+  // Find a debug location from inside the loop body that hits on every iteration
+  // We look for an instruction inside the loop that has a debug location
+  // pointing to a line INSIDE the loop body (not the for statement line)
   DILocation *loop_location = nullptr;
-  if (BranchInst *Branch = dyn_cast<BranchInst>(LastInst)) {
-    loop_location = Branch->getDebugLoc();
-    errs() << "Using Loop location from br: " << loop_location << endl;
-    if (loop_location == nullptr) {
-      errs() << "br instruction has no Debug Location... Abort! ";
-      Branch->print(errs());
-      errs() << endl;
-      exit(1);
+  DILocation *fallback_location = nullptr;
+
+  // First, try to find an instruction in the loop body with a debug location
+  for (BasicBlock *BB : L->getBlocks()) {
+    for (Instruction &I : *BB) {
+      if (auto DL = I.getDebugLoc()) {
+        if (!fallback_location) {
+          fallback_location = DL.get();
+        }
+        // Skip PHI nodes and terminators - we want actual loop body instructions
+        if (!isa<PHINode>(&I) && !I.isTerminator()) {
+          loop_location = DL.get();
+          break;
+        }
+      }
     }
-  } else {
-    errs() << "ERROR: Last instruction of Loop Latch is not a br instruction."
-           << endl;
+    if (loop_location) break;
+  }
+
+  // Fall back to the latch branch location if nothing else found
+  if (!loop_location) {
+    auto latch = L->getLoopLatch();
+    Instruction *LastInst = &latch->back();
+    if (BranchInst *Branch = dyn_cast<BranchInst>(LastInst)) {
+      loop_location = Branch->getDebugLoc();
+    }
+  }
+
+  if (!loop_location) {
+    loop_location = fallback_location;
+  }
+
+  if (!loop_location) {
+    errs() << "ERROR: Could not find debug location for loop. "
+           << "Ensure code is compiled with -g flag.\n";
     exit(1);
   }
+
+  errs() << "Using Loop location: line " << loop_location->getLine()
+         << ", col " << loop_location->getColumn() << endl;
+
+  auto latch = L->getLoopLatch();
 
   // Insert watermark variable at beginning of Predecessor
   Function *ParentFunction = L->getHeader()->getParent();
