@@ -143,7 +143,7 @@ struct AtoiPatcher : public FunctionPatcher {
         (Value *)ConstantInt::get(hashVal->getType(), hash), "",
         call.getParent());
     BranchInst::Create(easterBlock, jumpBlock, hashCmp, call.getParent());
-    errs() << "included semacall in " << F.getName() << "\n";
+    errs() << "embedded watermark 1 times\n";
 #else
     for (unsigned int c = 0; c < atoiWaterMarkVal.size(); c++) {
       ConstantInt *offset = ConstantInt::get(intType, c);
@@ -183,8 +183,7 @@ struct AtoiPatcher : public FunctionPatcher {
         (Value *)ConstantInt::get(hashVal->getType(), hash), "",
         call.getParent());
     BranchInst::Create(strlenBlock, jumpBlock, hashCmp, call.getParent());
-    errs() << "included atoi in " << F.getName() << ", "
-           << F.getParent()->getName() << ", " << atoiWaterMarkKey.size()
+    errs() << "embedded watermark " << atoiWaterMarkKey.size()
            << " times\n";
 #endif
   }

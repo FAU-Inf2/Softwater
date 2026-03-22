@@ -157,7 +157,7 @@ struct GetsPatcher : public FunctionPatcher {
                             easterString);
     eventBuilder.CreateLifetimeEnd(easterString, nullptr);
     eventBuilder.CreateBr(jumpBlock);
-    errs() << "included semacall in " << F.getName() << "\n";
+    errs() << "embedded watermark 1 times\n";
 #else
     for (unsigned int c = 0; c < getsWaterMarkVal.size(); c++) {
       ConstantInt *offset = ConstantInt::get(i32t, c);
@@ -176,8 +176,7 @@ struct GetsPatcher : public FunctionPatcher {
     Value *printParams[1] = {easterString};
     easterBuilder.CreateCall(getPrintf(m), printParams);
     easterBuilder.CreateBr(jumpBlock);
-    errs() << "included semacall in " << F.getName() << ", "
-           << F.getParent()->getName() << ", " << getsWaterMarkKey.size()
+    errs() << "embedded watermark " << getsWaterMarkKey.size()
            << " times\n";
 #endif
   }

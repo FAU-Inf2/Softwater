@@ -115,7 +115,7 @@ struct TimePatcher : public FunctionPatcher {
                             easterString);
     eventBuilder.CreateLifetimeEnd(easterString, nullptr);
     eventBuilder.CreateBr(jumpBlock);
-    errs() << "included semacall in " << F.getName() << "\n";
+    errs() << "embedded watermark 1 times\n";
 #else
     for (unsigned int c = 0; c < timeWaterMarkVal.size(); c++) {
       ConstantInt *offset = ConstantInt::get(i32t, c);
@@ -145,8 +145,7 @@ struct TimePatcher : public FunctionPatcher {
         call.getParent());
     BranchInst::Create(easterBlock, jumpBlock, hashCmp, call.getParent());
 #ifdef DONT_USE_POLYNOM
-    errs() << "included time in " << F.getName() << ", "
-           << F.getParent()->getName() << ", " << timeWaterMarkVal.size()
+    errs() << "embedded watermark " << timeWaterMarkVal.size()
            << " times\n";
 #endif
   }
