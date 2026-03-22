@@ -158,11 +158,13 @@ struct FunctionPatcher {
     Value *lastInst = builder.CreateMul(keyVal, addConstant1);
     currentVal *= addVal1;
     signed char modVal1 = (rand() % 5000) + 100;
+    if (modVal1 == 0) modVal1++;
     Constant *modConstant1 = ConstantInt::get(type, modVal1);
     lastInst = builder.CreateSRem(lastInst, modConstant1);
     currentVal %= modVal1;
     // by chance divides it by a random value
     signed char divVal1 = rand() % 8 + 1;
+    if (divVal1 == 0) divVal1++;
     if ((rand() % 10) >= 3) {
       Constant *divConstant1 = ConstantInt::get(type, divVal1);
       lastInst = builder.CreateSDiv(lastInst, divConstant1);
