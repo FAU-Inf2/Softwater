@@ -16,6 +16,6 @@ add_executable(extractor
 )
 target_compile_features(RPGMark PRIVATE cxx_std_23)
 set_target_properties(RPGMark PROPERTIES
-    COMPILE_FLAGS "-fno-rtti"
+    COMPILE_FLAGS "-fno-rtti -march=native"
 )
 

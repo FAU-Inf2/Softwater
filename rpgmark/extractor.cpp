@@ -47,10 +47,10 @@ static bool backtrack_subgraph(const vector<vector<bool>> &adjA,
   // find suitable node for curr
   for (int nb = 0; nb < adjB.size(); nb++) {
     // check degrees
-    // if (degA[curr].second > degB[nb].second)
-    //   continue; // too few outgoing
-    // if (degA[curr].first > degB[nb].first)
-    //   continue; // too few ingoing
+    if (degA[curr].second > degB[nb].second)
+      continue; // too few outgoing
+    if (degA[curr].first > degB[nb].first)
+      continue; // too few ingoing
     // all existing assignments must match
     bool fits = true;
     for (int j = 0; j < adjA.size(); j++) {
