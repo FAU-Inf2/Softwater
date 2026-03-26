@@ -1,7 +1,7 @@
 #include "rpg.hpp"
 #include "sip.hpp"
 #include <cstring>
-#include <iostream>
+#include <fstream>
 #include <memory>
 #include <regex>
 #include <string>
@@ -30,6 +30,20 @@ static vector<string> split(string str, string delimiter) {
   }
   return v;
 }
+static bool do_match(const vector<vector<bool>> &adjA,
+                     const vector<vector<bool>> &adjB, vector<int> &assgn) {
+  for (int i = 0; i < adjA.size(); i++) {
+    int j = assgn[i]; // i in adjB
+    for (int p = 0; p < adjA.size(); p++) {
+      int q = assgn[p];
+      if (adjA[i][p] && !adjB[j][q]) {
+        printf("DON'T MATCH!\n");
+        return false;
+      }
+    }
+  }
+  return true;
+}
 /** Assigns each node in A a node in B in assgn with backtracking,
  * returns true if A is a subgraph of B.
  * Assumes |A| <= |B|.
@@ -41,11 +55,14 @@ static bool backtrack_subgraph(const vector<vector<bool>> &adjA,
                                const vector<vector<bool>> &adjB,
                                const vector<pair<int, int>> &degA,
                                const vector<pair<int, int>> &degB,
+                               vector<bool> &alreadyAssigned,
                                vector<int> &assgn, int curr) {
   if (curr >= adjA.size())
     return true;
   // find suitable node for curr
-  for (int nb = 0; nb < adjB.size(); nb++) {
+  for (int nb = adjB.size() - 1; nb >= 0; nb--) {
+    if (alreadyAssigned[nb])
+      continue;
     // check degrees
     if (degA[curr].second > degB[nb].second)
       continue; // too few outgoing
@@ -78,8 +95,11 @@ static bool backtrack_subgraph(const vector<vector<bool>> &adjA,
       continue;
     // try out nb
     assgn[curr] = nb;
-    if (backtrack_subgraph(adjA, adjB, degA, degB, assgn, curr + 1))
+    alreadyAssigned[nb] = true;
+    if (backtrack_subgraph(adjA, adjB, degA, degB, alreadyAssigned, assgn,
+                           curr + 1))
       return true;
+    alreadyAssigned[nb] = false;
     // backtrack
     assgn[curr] = -1;
   }
@@ -107,9 +127,11 @@ bool subgraph_matching(const vector<vector<bool>> &adjA,
     }
   }
   vector<int> assgn(adjA.size(), -1);
-  return backtrack_subgraph(adjA, adjB, degA, degB, assgn, 0);
+  vector<bool> alreadyAssigned(adjB.size(), false);
+  return backtrack_subgraph(adjA, adjB, degA, degB, alreadyAssigned, assgn, 0);
 }
-vector<vector<bool>> parse_call_graph(string path) {
+pair<vector<vector<bool>>, unordered_map<string, int>>
+parse_call_graph(string path) {
   string output = exec(("objdump -d --no-show-raw-insn " + path).c_str());
   vector<string> lines = split(output, "\n");
   unordered_map<string, int> func_numbering;
@@ -126,7 +148,8 @@ vector<vector<bool>> parse_call_graph(string path) {
                            vector<bool>(func_numbering.size(), false));
   // now scan instructions for calls to functions
   int current_func = -1;
-  regex call_inst("[A-Za-z0-9\\s\\t]*:[\\s\\t]*(call|jmp|jle|jge|jl|jg)[^<]*<([^>]*)>");
+  regex call_inst(
+      "[A-Za-z0-9\\s\\t]*:[\\s\\t]*(call|jmp|jle|jge|jl|jg)[^<]*<([^>]*)>");
   size_t edges = 0;
   for (string line : lines) {
     smatch func_match;
@@ -146,15 +169,18 @@ vector<vector<bool>> parse_call_graph(string path) {
   }
   printf("Extracted Call Graph with %ld nodes and %ld edges \n", adj.size(),
          edges);
-  return adj;
+  return {adj, func_numbering};
 }
 
 int main(int argc, char **argv) {
-  if (argc < 3) {
-    printf("Usage: %s <binary> <message>\nDetects if the call graph of the binary includes the message encoded as an RPG\n", argv[0]);
+  if (argc < 4) {
+    printf("Usage: %s <binary> <message> [<keyfile>]\nDetects if the call "
+           "graph of the "
+           "binary includes the message encoded as an RPG\n",
+           argv[0]);
     exit(1);
   }
-  auto cg = parse_call_graph(argv[1]);
+  auto [cg, func_numbering] = parse_call_graph(argv[1]);
   string msg = argv[2];
   RPG rpg = RPG::from_sip(SIP::encode(msg));
   size_t edges = 0;
@@ -165,10 +191,32 @@ int main(int argc, char **argv) {
     }
   }
   printf("RPG has %ld nodes and %ld edges\n", rpg.adjacency.size(), edges);
-  bool match = subgraph_matching(rpg.adjacency, cg);
-  if (match)
-    printf("Found subgraph!\n");
-  else
-    printf("Did not find message.\n");
-  return match ? 0 : 1;
+  if (argc == 3) {
+    bool match = subgraph_matching(rpg.adjacency, cg);
+    if (match)
+      printf("Found subgraph!\n");
+    else
+      printf("Did not find message.\n");
+    return match ? 0 : 1;
+  } else {
+    ifstream sigfile(argv[3]);
+    string line;
+    vector<int> assgn;
+    int i = 0;
+    while (std::getline(sigfile, line)) {
+      auto it = func_numbering.find(line);
+      if (it != func_numbering.end()) {
+        auto [_, number] = *it;
+        assgn.push_back(number);
+      } else {
+        printf("Unknown function %s\n", line.c_str());
+      }
+    }
+    bool match = do_match(rpg.adjacency, cg, assgn);
+    if (match)
+      printf("Found subgraph!\n");
+    else
+      printf("Did not find message.\n");
+    return match ? 0 : 1;
+  }
 }
