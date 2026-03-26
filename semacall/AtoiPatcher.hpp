@@ -25,19 +25,6 @@ struct AtoiPatcher : public FunctionPatcher {
   }
   static llvm::Instruction *generateHash(llvm::CallInst &call, int *finalHash) {
     using namespace llvm;
-    long value;
-    if (call.getCalledFunction()->getName() == "atoi") {
-      value = atoi(atoiWaterMarkKey.c_str());
-    } else if (call.getCalledFunction()->getName().ends_with("strtol")) {
-      // get third parameter
-      ConstantInt &base = *(ConstantInt *)call.getOperand(2);
-      value =
-          strtol(atoiWaterMarkKey.c_str(), nullptr, (int)base.getSExtValue());
-    } else {
-      value = atol(atoiWaterMarkKey.c_str());
-    }
-    *finalHash = rand() % 0x7FFFFFFF;
-    return transformKeyToValue(call.getNextNode(), &call, value, *finalHash);
   }
   void patchInstruction(llvm::Function &F, llvm::CallInst &call) override {
     using namespace llvm;
@@ -55,9 +42,6 @@ struct AtoiPatcher : public FunctionPatcher {
     IntegerType *charType = Type::getInt8Ty(F.getContext());
     IntegerType *intType = Type::getInt32Ty(F.getContext());
     IntegerType *longType = Type::getInt64Ty(F.getContext());
-    // generate hash from key
-    int hash;
-    Instruction *hashVal = generateHash(call, &hash);
     // create jump block by moving last instruction
     BasicBlock *jumpBlock = BasicBlock::Create(F.getContext());
     jumpBlock->splice(jumpBlock->begin(), call.getParent(),
@@ -138,10 +122,19 @@ struct AtoiPatcher : public FunctionPatcher {
                             easterString);
     eventBuilder.CreateLifetimeEnd(easterString, nullptr);
     eventBuilder.CreateBr(jumpBlock);
-    CmpInst *hashCmp = ICmpInst::Create(
-        Instruction::ICmp, ICmpInst::Predicate::ICMP_EQ, (Value *)hashVal,
-        (Value *)ConstantInt::get(hashVal->getType(), hash), "",
-        call.getParent());
+    // generate hash from key
+    IRBuilder<> hashCheckBuilder(F.getContext());
+    hashCheckBuilder.SetInsertPoint(call.getParent());
+    Value *paramList[1] = {inputArray};
+    Function *hashfct = getHashFunction(F.getParent());
+    Value *hash = hashCheckBuilder.CreateCall(hashfct, paramList);
+    long keyHash = hashimpl(atoiWaterMarkKey.c_str());
+    long testValue = rand() % 1711922400l;
+    Value *hashVal =
+        transformKeyToValue(hashCheckBuilder, hash, keyHash, testValue);
+    CmpInst *hashCmp =
+        ICmpInst::Create(Instruction::ICmp, ICmpInst::Predicate::ICMP_EQ,
+                         hashVal, hash, "", call.getParent());
     BranchInst::Create(easterBlock, jumpBlock, hashCmp, call.getParent());
     errs() << "embedded watermark 1 times\n";
 #else
@@ -183,8 +176,15 @@ struct AtoiPatcher : public FunctionPatcher {
         (Value *)ConstantInt::get(hashVal->getType(), hash), "",
         call.getParent());
     BranchInst::Create(strlenBlock, jumpBlock, hashCmp, call.getParent());
-    errs() << "embedded watermark " << atoiWaterMarkKey.size()
-           << " times\n";
+    errs() << "embedded watermark " << atoiWaterMarkKey.size() << " times\n";
 #endif
+  }
+  static long hashimpl(const char *str) {
+    long res = 7;
+    while (*str != '\0' && *str != '\n') {
+      res = res ^ ((res << 5) + (res >> 2) + *str);
+      str++;
+    }
+    return res;
   }
 };
