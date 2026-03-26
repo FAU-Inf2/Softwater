@@ -31,13 +31,13 @@ static vector<string> split(string str, string delimiter) {
   return v;
 }
 static bool do_match(const vector<vector<bool>> &adjA,
-                     const vector<vector<bool>> &adjB, vector<int> &assgn) {
+                     const vector<vector<bool>> &adjB, vector<int> &assgn, const vector<string>& names) {
   for (int i = 0; i < adjA.size(); i++) {
     int j = assgn[i]; // i in adjB
     for (int p = 0; p < adjA.size(); p++) {
       int q = assgn[p];
       if (adjA[i][p] && !adjB[j][q]) {
-        printf("DON'T MATCH!\n");
+        printf("DON'T MATCH! Missing edge from %s to %s\n", names[j].c_str(), names[q].c_str());
         return false;
       }
     }
@@ -202,21 +202,24 @@ int main(int argc, char **argv) {
     ifstream sigfile(argv[3]);
     string line;
     vector<int> assgn;
+    vector<string> names(cg.size());
     int i = 0;
     while (std::getline(sigfile, line)) {
       auto it = func_numbering.find(line);
       if (it != func_numbering.end()) {
         auto [_, number] = *it;
         assgn.push_back(number);
+        names[number] = line;
       } else {
         printf("Unknown function %s\n", line.c_str());
       }
     }
-    bool match = do_match(rpg.adjacency, cg, assgn);
+    bool match = do_match(rpg.adjacency, cg, assgn, names);
     if (match)
       printf("Found subgraph!\n");
-    else
+    else {
       printf("Did not find message.\n");
+    }
     return match ? 0 : 1;
   }
 }

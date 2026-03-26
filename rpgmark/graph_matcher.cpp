@@ -126,6 +126,7 @@ void GraphMatcher::createMissingFunctions(
       }
       ValueToValueMapTy v2vm;
       Function *cloned = llvm::CloneFunction(toclone, v2vm, nullptr);
+      cloned->setLinkage(GlobalValue::LinkageTypes::ExternalLinkage);
       if (cloned->hasFnAttribute(Attribute::AlwaysInline)) {
         cloned->removeFnAttr(Attribute::AlwaysInline);
       }

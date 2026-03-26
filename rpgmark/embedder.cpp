@@ -107,6 +107,5 @@ llvmGetPassPluginInfo() {
                   MPM.addPass(RPGMark());
                   return true;
                 });
-            // this one is needed for clang
           }};
 }
