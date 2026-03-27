@@ -13,6 +13,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
+#include <llvm/Transforms/Scalar/LoopRotation.h>
 #include <map>
 
 using namespace llvm;
@@ -78,6 +79,9 @@ map<Loop *, Function *> getSuitableLoops(Module &M,
   map<Loop *, Function *> suitable_loops;
 
   for (auto &F : M) {
+    // Disable inlining
+    F.addFnAttr(Attribute::NoInline);
+    F.addFnAttr(Attribute::NoDuplicate);
 
     // Skip Function declarations (printf, rand, etc.)
     auto isDeclaration = F.isDeclaration();
@@ -85,21 +89,16 @@ map<Loop *, Function *> getSuitableLoops(Module &M,
       continue;
     }
 
+    // Skip functions that are not main and have no callers
+    if (F.getName() != "main" && F.user_empty()) {
+      errs() << "Skipping function " << F.getName() << "\n";
+      continue;
+    }
+
     LoopInfo &LI = FAM.getResult<LoopAnalysis>(F);
 
     if (not LI.empty()) {
-
       for (auto &L : LI.getLoopsInPreorder()) {
-
-        // Check if Loop is Rotated -> necessary for obtaining
-        // SmallConstantTripCount Pass LoopRotate executes LoopSimplify (should
-        // be executed in clang -O1)
-        bool rotated = L->isRotatedForm();
-        if (not rotated) {
-          errs() << "Loop not in Rotated Form -> skipping loop...\n";
-          continue;
-        }
-
         /*
          Get Trip Count == The number of times the loop iterates before it
          terminates. The variable that counts iterations is the trip counter.
@@ -114,7 +113,6 @@ map<Loop *, Function *> getSuitableLoops(Module &M,
         if (sctc == 0) {
           continue;
         }
-
         // Use MDNode for identifying loops that are called multiple times
         MDNode *loop_id = L->getLoopID();
         // Count the occurrences of the target value in list_ids

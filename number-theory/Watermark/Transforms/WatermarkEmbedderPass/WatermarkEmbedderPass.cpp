@@ -18,11 +18,6 @@
 // - inserts Watermark in each selected loop
 // - creates Watermark-Key out of the results
 
-#include "llvm/Pass.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/raw_ostream.h"
 #include "includes/LoopAnalysis.cpp"
 #include "includes/LoopInsertion.cpp"
 #include "includes/WatermarkGenerator.cpp"
@@ -36,7 +31,12 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
@@ -45,6 +45,7 @@
 #include <iostream>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Transforms/Scalar/LoopRotation.h>
+#include <llvm/Transforms/Utils/LoopSimplify.h>
 #include <set>
 #include <string>
 #include <vector>
@@ -69,12 +70,12 @@ namespace {
 /**
  * @brief Writes key file from the obtained watermark-embedding results
  * @param keys vector of insertion-points <line1, column1, iterations, wm_name,
- * expected_wm_value>
+ * expected_wm_value, function_name>
  * @param signature the embedded signature S
  * @param keyFilePath path to the key file
  */
 void createKeyTxt(
-    std::vector<std::tuple<int, int, int, std::string, int>> keys,
+    std::vector<std::tuple<int, int, int, std::string, int, std::string>> keys,
     long long signature, const std::string &keyFilePath) {
 
   std::ofstream outFile(keyFilePath);
@@ -82,14 +83,16 @@ void createKeyTxt(
   if (outFile.is_open()) {
     // First line: signature
     outFile << "# signature=" << signature << '\n';
-    // Following lines: breakpoint info
+    // Following lines: breakpoint info (line col iterations var_name
+    // expected_value function_name)
     for (const auto &key : keys) {
       outFile << std::get<0>(key) << ' ' << std::get<1>(key) << ' '
               << std::get<2>(key) << ' ' << std::get<3>(key) << ' '
-              << std::get<4>(key) << '\n';
+              << std::get<4>(key) << ' ' << std::get<5>(key) << '\n';
     }
     outFile.close();
-    errs() << "Data written to " << keyFilePath << " successfully." << endl << endl;
+    errs() << "Data written to " << keyFilePath << " successfully." << endl
+           << endl;
   } else {
     errs() << "ABORT: Unable to open file for writing: " << keyFilePath << endl;
     exit(1);
@@ -193,7 +196,8 @@ struct WatermarkEmbedderPass : public PassInfoMixin<WatermarkEmbedderPass> {
     ;
 
     // Generate Watermark Variables (use user-provided signature if available)
-    Watermark watermark = generateWatermark(max_insertions, NumberTheorySignature);
+    Watermark watermark =
+        generateWatermark(max_insertions, NumberTheorySignature);
 
     // get the first [max_insertions] loops of sorted_loops
     vector<Loop *> selected_loops;
@@ -219,7 +223,7 @@ struct WatermarkEmbedderPass : public PassInfoMixin<WatermarkEmbedderPass> {
     errs() << endl;
 
     // Insert the watermark parts
-    std::vector<std::tuple<int, int, int, std::string, int>> keys;
+    std::vector<std::tuple<int, int, int, std::string, int, std::string>> keys;
     int wm_counter = 0;
     for (const auto &pair : loops) {
       Loop *loop = pair.first;
@@ -250,9 +254,9 @@ struct WatermarkEmbedderPass : public PassInfoMixin<WatermarkEmbedderPass> {
       DILocation *breakpoint_location = insertWMInLoop(
           b, iterations, loop, *func, FAM, M, wm_counter, wm_name);
 
-      keys.push_back(std::make_tuple(breakpoint_location->getLine(),
-                                     breakpoint_location->getColumn(),
-                                     iterations, wm_name, b));
+      keys.push_back(std::make_tuple(
+          breakpoint_location->getLine(), breakpoint_location->getColumn(),
+          iterations, wm_name, b, func->getName().str()));
 
       wm_counter = wm_counter + 1;
     } // END for loop in loops
@@ -277,6 +281,10 @@ llvmGetPassPluginInfo() {
                 [](StringRef Name, ModulePassManager &MPM,
                    ArrayRef<PassBuilder::PipelineElement>) {
                   if (Name == "wm-embedder") {
+                    MPM.addPass(
+                        createModuleToFunctionPassAdaptor(LoopSimplifyPass()));
+                    MPM.addPass(createModuleToFunctionPassAdaptor(
+                        createFunctionToLoopPassAdaptor(LoopRotatePass())));
                     MPM.addPass(WatermarkEmbedderPass());
                     return true;
                   }

@@ -93,7 +93,6 @@ struct RPGMark : public PassInfoMixin<RPGMark> {
       }
     }
     delete cg;
-    verifyModule(M, &errs());
     return PreservedAnalyses::none();
   }
 };

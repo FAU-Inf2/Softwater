@@ -20,7 +20,6 @@ def parse_key_file(key_path):
     """
     Parse the key file and extract signature and watermark entries.
     Returns: (signature, watermarks) where watermarks is a list of tuples
-    Format: line column iterations var_name expected_value [function_name]
     """
     signature = None
     watermarks = []
@@ -40,7 +39,7 @@ def parse_key_file(key_path):
             if line.startswith('#'):
                 continue
 
-            # Parse watermark entry: line column iterations var_name expected_value [function_name]
+            # Parse watermark entry: line column iterations var_name expected_value
             s_values = line.split()
             if len(s_values) >= 5:
                 line_nr = int(s_values[0])
@@ -48,123 +47,91 @@ def parse_key_file(key_path):
                 steps = int(s_values[2])
                 var_name = s_values[3]
                 expected_res = int(s_values[4])
-                # Function name is optional (for backwards compatibility)
-                func_name = s_values[5] if len(s_values) >= 6 else None
-                watermarks.append((line_nr, column_nr, steps, var_name, expected_res, func_name))
+                watermarks.append((line_nr, column_nr, steps, var_name, expected_res))
 
     return signature, watermarks
 
 
-def extract_watermark_value(lldb_path, filename, line_nr, column_nr, steps, var_name, func_name=None, program_input=None, program_args=None):
+def extract_watermark_value(lldb_path, filename, line_nr, column_nr, steps, var_name, program_input=None, program_args=None):
     """
     Run LLDB to extract the value of a variable at a specific iteration.
     Returns the extracted value or None if extraction failed.
     """
-    # Try different frame strategies: current frame, then parent frame (for inlined code)
-    for use_up in [False, True]:
-        # Try with column first, then without column as fallback
-        for use_column in [True, False]:
-            # Build the LLDB command script
-            if use_column and column_nr > 0:
-                cmd_str = f"breakpoint set --line {line_nr} --column {column_nr}\n"
-            else:
-                cmd_str = f"breakpoint set --line {line_nr}\n"
+    # Try with column first, then without column as fallback
+    for use_column in [True, False]:
+        # Build the LLDB command script
+        if use_column and column_nr > 0:
+            cmd_str = f"breakpoint set --line {line_nr} --column {column_nr}\n"
+        else:
+            cmd_str = f"breakpoint set --line {line_nr}\n"
 
-            # Handle program arguments
-            if program_args:
-                args_escaped = ' '.join(f'"{a}"' if ' ' in a else a for a in program_args)
-                cmd_str += f"settings set target.run-args {args_escaped}\n"
+        # Handle program arguments
+        if program_args:
+            args_escaped = ' '.join(f'"{a}"' if ' ' in a else a for a in program_args)
+            cmd_str += f"settings set target.run-args {args_escaped}\n"
 
-            # Handle stdin input
-            if program_input:
-                # Create a temporary file for stdin input
-                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.stdin') as stdin_file:
-                    stdin_file.write(program_input)
-                    stdin_path = stdin_file.name
-                cmd_str += f"settings set target.input-path {stdin_path}\n"
-            else:
-                stdin_path = None
+        # Handle stdin input
+        if program_input:
+            # Create a temporary file for stdin input
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.stdin') as stdin_file:
+                stdin_file.write(program_input)
+                stdin_path = stdin_file.name
+            cmd_str += f"settings set target.input-path {stdin_path}\n"
+        else:
+            stdin_path = None
 
-            cmd_str += "run\n"
+        cmd_str += "run\n"
 
-            # Continue to the desired iteration
-            for _ in range(steps - 1):
-                cmd_str += "c\n"
+        # Continue to the desired iteration
+        for _ in range(steps - 1):
+            cmd_str += "c\n"
 
-            # Try parent frame for inlined functions
-            if use_up:
-                cmd_str += "up\n"
-            
-            cmd_str += f"frame variable {var_name}\n"
-            cmd_str += "exit\n"
+        cmd_str += f"frame variable {var_name}\n"
+        cmd_str += "exit\n"
 
-            # Write script to temp file
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.lldb') as script_file:
-                script_file.write(cmd_str)
-                script_file_path = script_file.name
+        # Write script to temp file
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.lldb') as script_file:
+            script_file.write(cmd_str)
+            script_file_path = script_file.name
 
-            try:
-                cmd = [lldb_path, "--batch", "--source", script_file_path, filename]
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                stdout_bytes, stderr_bytes = process.communicate(timeout=120)
-                # Handle potential binary output from program (e.g., pi-digits)
-                output = stdout_bytes.decode('utf-8', errors='replace')
-                errors = stderr_bytes.decode('utf-8', errors='replace')
+        try:
+            cmd = [lldb_path, "--batch", "--source", script_file_path, filename]
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            output, errors = process.communicate(timeout=120)
 
-                # Check if breakpoint was resolved
-                if "no locations (pending)" in output and use_column:
-                    # Try without column
-                    os.unlink(script_file_path)
-                    if stdin_path and os.path.exists(stdin_path):
-                        os.unlink(stdin_path)
-                    continue
-
-                # Parse the variable value from output
-                if output:
-                    # Look for pattern like "var_name = value"
-                    pattern = rf"\({re.escape('int')}\)\s*{re.escape(var_name)}\s*=\s*(-?\d+)"
-                    match = re.search(pattern, output)
-                    if match:
-                        return int(match.group(1))
-
-                    # Check for variable not available
-                    if "<variable not available>" in output:
-                        os.unlink(script_file_path)
-                        if stdin_path and os.path.exists(stdin_path):
-                            os.unlink(stdin_path)
-                        continue
-
-                # If we found nothing, try next strategy
+            # Check if breakpoint was resolved
+            if "no locations (pending)" in output and use_column:
+                # Try without column
                 os.unlink(script_file_path)
                 if stdin_path and os.path.exists(stdin_path):
                     os.unlink(stdin_path)
                 continue
 
-            except subprocess.TimeoutExpired:
-                process.kill()
-                if os.path.exists(script_file_path):
-                    os.unlink(script_file_path)
-                if stdin_path and os.path.exists(stdin_path):
-                    os.unlink(stdin_path)
-                continue
-            except Exception as e:
-                print(f"{colors.YELLOW}Warning: {e}{colors.RESET}", file=sys.stderr)
-                if os.path.exists(script_file_path):
-                    os.unlink(script_file_path)
-                if stdin_path and os.path.exists(stdin_path):
-                    os.unlink(stdin_path)
-                continue
-            finally:
-                if os.path.exists(script_file_path):
-                    try:
-                        os.unlink(script_file_path)
-                    except:
-                        pass
-                if stdin_path and os.path.exists(stdin_path):
-                    try:
-                        os.unlink(stdin_path)
-                    except:
-                        pass
+            # Parse the variable value from output
+            if output:
+                # Look for pattern like "var_name = value"
+                pattern = rf"{re.escape(var_name)}\s*=\s*(-?\d+)"
+                match = re.search(pattern, output)
+                if match:
+                    return int(match.group(1))
+
+                # Check for variable not available
+                if "<variable not available>" in output:
+                    return None
+
+            return None
+
+        except subprocess.TimeoutExpired:
+            process.kill()
+            return None
+        except Exception as e:
+            print(f"{colors.YELLOW}Warning: {e}{colors.RESET}", file=sys.stderr)
+            return None
+        finally:
+            if os.path.exists(script_file_path):
+                os.unlink(script_file_path)
+            if stdin_path and os.path.exists(stdin_path):
+                os.unlink(stdin_path)
 
     return None
 
@@ -249,7 +216,7 @@ def run_extraction(key_path, filename, lldb_path, program_input=None, program_ar
     extracted_bi = []
     correct_count = 0
 
-    for i, (line_nr, column_nr, steps, var_name, expected_bi, func_name) in enumerate(watermarks):
+    for i, (line_nr, column_nr, steps, var_name, expected_bi) in enumerate(watermarks):
         if steps > 50000:
             print(f"{colors.BLUE}SKIPPED{colors.RESET} (steps={steps} > 50000)")
             extracted_bi.append(None)
@@ -257,11 +224,10 @@ def run_extraction(key_path, filename, lldb_path, program_input=None, program_ar
 
         if verbose:
             print(f"\nExtracting watermark {i+1}: line={line_nr}, col={column_nr}, "
-                  f"iterations={steps}, var={var_name}, expected_b={expected_bi}, func={func_name}")
+                  f"iterations={steps}, var={var_name}, expected_b={expected_bi}")
 
         actual_value = extract_watermark_value(
             lldb_path, filename, line_nr, column_nr, steps, var_name,
-            func_name=func_name,
             program_input=program_input, program_args=program_args
         )
 

@@ -133,11 +133,11 @@ Instruction *insertIntVar(int val, int counter, DIBuilder &DIB, Function *F,
   // Finalize the DIBuilder
   DIB.finalize();
 
-  // Insert store after alloc
+  // Insert store after alloc (volatile to prevent optimization)
   IRBuilder<> builder(&EntryBlockFunc);
   Value *constant = builder.getInt32(val);
   errs() << "Insert Store %WM = " << val << " after alloc" << endl << endl;
-  auto *store = new StoreInst(constant, allo, allo->getNextNode());
+  auto *store = new StoreInst(constant, allo, /* isVolatile */ true, allo->getNextNode());
 
   return allo;
 }
@@ -151,7 +151,7 @@ Instruction *insertAdd(Instruction *var, int val, Instruction *I, int counter) {
   Value *constant = builder.getInt32(val);
 
   errs() << "Insert Load WM in Latch" << endl;
-  auto *load = builder.CreateLoad(intType, var, "");
+  auto *load = builder.CreateLoad(intType, var, /* isVolatile */ true, "");
 
   errs() << "Insert Add WM += " << val << " after Load WM" << endl;
   Instruction *Add =
@@ -159,7 +159,7 @@ Instruction *insertAdd(Instruction *var, int val, Instruction *I, int counter) {
   Add->insertBefore(I);
 
   errs() << "Insert Store after Add" << endl;
-  auto *store = new StoreInst(Add, var, I);
+  auto *store = new StoreInst(Add, var, /* isVolatile */ true, I);
 
   return store;
 }
@@ -173,7 +173,7 @@ Instruction *insertSub(Instruction *var, int val, Instruction *I, int counter) {
   Value *constant = builder.getInt32(val);
 
   errs() << "Insert Load WM in Latch" << endl;
-  auto *load = builder.CreateLoad(intType, var, "");
+  auto *load = builder.CreateLoad(intType, var, /* isVolatile */ true, "");
 
   errs() << "Insert SUB WM -= " << val << " after Load WM" << endl;
   Instruction *Sub =
@@ -181,7 +181,7 @@ Instruction *insertSub(Instruction *var, int val, Instruction *I, int counter) {
   Sub->insertBefore(I);
 
   errs() << "Insert Store after Sub" << endl;
-  auto *store = new StoreInst(Sub, var, I);
+  auto *store = new StoreInst(Sub, var, /* isVolatile */ true, I);
 
   return store;
 }
@@ -316,6 +316,8 @@ DILocation *insertWMInLoop(int b, int iteration, Loop *L, Function &F,
 
   // Insert watermark variable at beginning of Predecessor
   Function *ParentFunction = L->getHeader()->getParent();
+  ParentFunction->addFnAttr(Attribute::NoInline);
+  
   DIBuilder DIB(M);
   Instruction *allo = insertIntVar(x0, counter, DIB, ParentFunction, var_name);
 
@@ -337,6 +339,27 @@ DILocation *insertWMInLoop(int b, int iteration, Loop *L, Function &F,
     errs() << endl;
   }
 
+  // Get the debug location from the store instruction in the latch
+  // This ensures the breakpoint is set where the watermark variable is accessible
+  DILocation *key_file_location = nullptr;
+  
+  // First, try to get debug location from the latch terminator (branch back to header)
+  if (Instruction *term = latch->getTerminator()) {
+    if (DILocation *loc = term->getDebugLoc()) {
+      key_file_location = loc;
+    }
+  }
+  
+  // Fallback: use the function's starting location to ensure we're in the right scope
+  if (!key_file_location) {
+    key_file_location = DILocation::get(F.getContext(),
+                                        ParentFunction->getSubprogram()->getLine(),
+                                        0, ParentFunction->getSubprogram());
+  }
+  
+  errs() << "Using key file location: line " << key_file_location->getLine()
+         << ", col " << key_file_location->getColumn() << endl;
+
   errs() << "Create Opaque Predicate..." << endl;
 
   // Load
@@ -344,15 +367,14 @@ DILocation *insertWMInLoop(int b, int iteration, Loop *L, Function &F,
   IRBuilder<> builder(context);
   builder.SetInsertPoint(store->getNextNonDebugInstruction());
   Type *intType = Type::getInt32Ty(context);
-  auto *load = builder.CreateLoad(intType, allo, "");
+  auto *load = builder.CreateLoad(intType, allo, /* isVolatile */ true, "");
   errs() << "Insert load after store" << endl;
 
   // Get the parent basic block of the instruction
   BasicBlock *parentBB = load->getParent();
 
-  // Add Debug Location to load -> thats where the wm-variable will be found in
-  // the debugger! Location = Loop begin
-  load->setDebugLoc(loop_location);
+  // Add Debug Location to load -> this is where the watermark variable can be read
+  load->setDebugLoc(key_file_location);
   errs() << "Add DBG Location to load" << endl;
 
   // Create a new basic block
@@ -444,7 +466,7 @@ DILocation *insertWMInLoop(int b, int iteration, Loop *L, Function &F,
   */
 
   errs() << "---------------------------" << endl << endl;
-  return loop_location;
+  return key_file_location;
 
 } // END insertWMInLoop
 } // namespace

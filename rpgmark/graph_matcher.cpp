@@ -1,6 +1,7 @@
 #include "graph_matcher.hpp"
 #include <llvm/Analysis/CallGraph.h>
 #include <llvm/IR/Attributes.h>
+#include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
@@ -156,6 +157,7 @@ void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
     split->splice(split->end(), orig, it, orig->end());
   }
   // add new block with opaque call (opaque)
+  DISubprogram *SP = caller->getSubprogram();
   BasicBlock *opaque = BasicBlock::Create(caller->getContext(), "opaque");
   caller->insert(caller->end(), opaque);
   {
@@ -166,7 +168,9 @@ void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
       Type *at = arg.getType();
       opaqueCallParams.push_back(Constant::getNullValue(at));
     }
-    opaqueBuild.CreateCall(callee, opaqueCallParams);
+    callee->addFnAttr(Attribute::NoInline);
+    CallInst *call = opaqueBuild.CreateCall(callee, opaqueCallParams);
+    call->setDebugLoc(DILocation::get(caller->getContext(), 0, 0, SP));
     // branch to split
     opaqueBuild.CreateBr(split);
   }
@@ -179,15 +183,14 @@ void GraphMatcher::insertOpaqueCall(Function *caller, Function *callee) {
     FunctionType *fType =
         FunctionType::get(Type::getInt64Ty(mod->getContext()), params, false);
     FunctionCallee timeFunc = mod->getOrInsertFunction("time", fType);
-    Value *timeVal =
+    CallInst *timeVal =
         origBuild.CreateCall(timeFunc, {Constant::getNullValue(params[0])});
+    timeVal->setDebugLoc(DILocation::get(caller->getContext(), 0, 0, SP));
     Value *pred = origBuild.CreateCmp(
         CmpInst::Predicate::ICMP_SGT, timeVal,
         ConstantInt::get(Type::getInt64Ty(mod->getContext()), rand() % 10000));
     origBuild.CreateCondBr(pred, split, opaque);
   }
-  if (verifyFunction(*caller, &errs()))
-    throw std::runtime_error("");
 }
 
 void GraphMatcher::createMissingEdges(llvm::Module &m, CallGraph &cg, RPG &rpg,
