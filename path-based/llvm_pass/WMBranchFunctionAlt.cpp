@@ -5,13 +5,17 @@
 #include "WMBranchFunctionAlt.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <llvm/IR/Analysis.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/PassPlugin.h>
 #include <random>
 #include <vector>
 
-#include "llvm/ADT/iterator_range.h"
 #include "llvm/CodeGen/SelectionDAGNodes.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/IR/BasicBlock.h"
@@ -222,9 +226,9 @@ void saveJMP(BasicBlock *bb, BasicBlock *bbTarget, size_t idx) {
  */
 bool canManipDestBB(BasicBlock *B) {
   // skip basic blocks with phi nodes
-  if (isa<PHINode>(B->getInstList().front())) {
-    return false;
-  }
+  //if (isa<PHINode>(B->begin())) {
+  //  return false;
+  //}
 
   unsigned int numPred = B->getNumUses();
   unsigned int numPredJMP = 0;
@@ -269,13 +273,10 @@ void prepareJMPs(Module &M) {
   for (auto &F : M) {
     for (auto &B : F) {
       for (auto &I : B) {
-        if ((std::string)I.getOpcodeName() == "br" && I.getNumOperands() == 1) {
+        if (isa<BranchInst>(I) && I.getNumOperands() == 1) {
           auto dest = I.getSuccessor(0);
           auto next = B.getNextNode();
-          // skip this JMP if the destination is the next basic block.
-          // because this kind of unconditional JMP will be omitted in the
-          // architecture specific assembly.
-          if (next == dest || (B.getInstList().size() == 1 && canSplit)) {
+          if (B.size() == 1 && canSplit) {
             continue;
           }
 
@@ -425,7 +426,7 @@ void insertWatermark(Module &M, BasicBlock **wmBlocks) {
  */
 void generateJmpTable(Module &M, BasicBlock **wmBlocks) {
   static IRBuilder<> Builder(M.getContext());
-  Type *ty = Builder.getInt8PtrTy();
+  Type *ty = Builder.getPtrTy();
 
   // set wm entry (first JMP -> first `call branchFunction()` which encodes the
   // first wm bit) get source and target from JMP and write to constant variable
@@ -496,8 +497,8 @@ void finishBranchFunction(Module &M) {
 
   InlineAsm *iasm;
   // LLVM integer types
-  Type *tyInt8Ptr = Type::getInt8PtrTy(ctx);
-  Type *tyInt8PtrPtr = Type::getInt8PtrTy(ctx)->getPointerTo();
+  Type *tyInt8Ptr = PointerType::get(ctx, 0);
+  Type *tyInt8PtrPtr = PointerType::get(ctx, 0);
   Type *tyInt32 = Type::getInt32Ty(ctx);
   Type *tyInt64 = Type::getInt64Ty(ctx);
   FunctionType *ftyInt64 = FunctionType::get(Type::getInt64Ty(ctx), false);
@@ -515,16 +516,16 @@ void finishBranchFunction(Module &M) {
                          "=r,~{dirflag},~{fpsr},~{flags}", false, ftyInt64);
   CallInst *addrSrc = irBuilder.CreateCall(ftyInt64, iasm);
   auto *addrDestMem = irBuilder.CreateAlloca(tyInt64);
-  addrDestMem->setAlignment(8);
+  addrDestMem->setAlignment(Align(8));
   auto *idx = irBuilder.CreateAlloca(tyInt32);
-  idx->setAlignment(4);
+  idx->setAlignment(Align(4));
   auto *idxInit = ConstantInt::get(tyInt32, 0);
-  irBuilder.CreateAlignedStore(idxInit, idx, 4);
+  irBuilder.CreateAlignedStore(idxInit, idx, Align(4));
   irBuilder.CreateBr(bbLoopHead);
 
   // BB: loop header
   irBuilder.SetInsertPoint(bbLoopHead);
-  auto *idxTmp = irBuilder.CreateAlignedLoad(tyInt32, idx, 4);
+  auto *idxTmp = irBuilder.CreateLoad(tyInt32, idx, 4);
   auto *loopTerminator = ConstantInt::get(tyInt32, addresses.size());
   auto *cmpLoop =
       irBuilder.CreateICmp(CmpInst::ICMP_SLT, idxTmp, loopTerminator);
@@ -532,14 +533,15 @@ void finishBranchFunction(Module &M) {
 
   // BB: loop body
   irBuilder.SetInsertPoint(bbLoopBody);
-  idxTmp = irBuilder.CreateAlignedLoad(tyInt32, idx, 4);
+  idxTmp = irBuilder.CreateAlignedLoad(tyInt32, idx, Align(4));
   auto *idx64 = irBuilder.CreateSExt(idxTmp, tyInt64);
   Value *indexList[2] = {ConstantInt::get(tyInt64, 0), idx64};
   auto *addressesElem = irBuilder.CreateInBoundsGEP(
-      arr, ArrayRef<Value *>(indexList, 2), "addressElem");
+      arrayTy, arr, ArrayRef<Value *>(indexList, 2), "addressElem");
   auto *tmpI8PtrPtr =
-      irBuilder.CreateAlignedLoad(tyInt8PtrPtr, addressesElem, 8);
-  auto *addrLoopSrcPtr = irBuilder.CreateAlignedLoad(tyInt8Ptr, tmpI8PtrPtr, 8);
+      irBuilder.CreateAlignedLoad(tyInt8PtrPtr, addressesElem, Align(8));
+  auto *addrLoopSrcPtr =
+      irBuilder.CreateAlignedLoad(tyInt8Ptr, tmpI8PtrPtr, Align(8));
   auto *addrLoopSrc = irBuilder.CreatePtrToInt(addrLoopSrcPtr, tyInt64);
   auto *callInstrLength = ConstantInt::get(tyInt64, 5);
   auto *addrLoopSrcCorrected =
@@ -550,24 +552,26 @@ void finishBranchFunction(Module &M) {
 
   // BB: loop increment
   irBuilder.SetInsertPoint(bbLoopInc);
-  idxTmp = irBuilder.CreateAlignedLoad(tyInt32, idx, 4);
+  idxTmp = irBuilder.CreateAlignedLoad(tyInt32, idx, Align(4));
   auto *loopInc = ConstantInt::get(tyInt32, 2);
   auto *idxInc = irBuilder.CreateAdd(idxTmp, loopInc, "idxInc", false, true);
-  irBuilder.CreateAlignedStore(idxInc, idx, 4);
+  irBuilder.CreateAlignedStore(idxInc, idx, Align(4));
   irBuilder.CreateBr(bbLoopHead);
 
   // BB: match
   irBuilder.SetInsertPoint(bbMatch);
-  idxTmp = irBuilder.CreateAlignedLoad(tyInt32, idx, 4);
+  idxTmp = irBuilder.CreateAlignedLoad(tyInt32, idx, Align(4));
   auto *inc = ConstantInt::get(tyInt32, 1);
   idxInc = irBuilder.CreateAdd(idxTmp, inc, "inc", false, false);
   Value *indexListMatch[2] = {ConstantInt::get(tyInt32, 0), idxInc};
   auto *addrDestPtrPtr = irBuilder.CreateInBoundsGEP(
-      arr, ArrayRef<Value *>(indexListMatch, 2), "addrDestPtrPtr");
-  tmpI8PtrPtr = irBuilder.CreateAlignedLoad(tyInt8PtrPtr, addrDestPtrPtr, 8);
-  auto *addrDestPtr = irBuilder.CreateAlignedLoad(tyInt8Ptr, tmpI8PtrPtr, 8);
+      arrayTy, arr, ArrayRef<Value *>(indexListMatch, 2), "addrDestPtrPtr");
+  tmpI8PtrPtr =
+      irBuilder.CreateAlignedLoad(tyInt8PtrPtr, addrDestPtrPtr, Align(8));
+  auto *addrDestPtr =
+      irBuilder.CreateAlignedLoad(tyInt8Ptr, tmpI8PtrPtr, Align(8));
   auto *addrDest = irBuilder.CreatePtrToInt(addrDestPtr, tyInt64);
-  irBuilder.CreateAlignedStore(addrDest, addrDestMem, 8);
+  irBuilder.CreateAlignedStore(addrDest, addrDestMem, Align(8));
   iasm = createInlineAsm(M, "movq -8(%rsp), %rax");
   irBuilder.CreateCall(iasm);
   iasm = createInlineAsm(M, "movq %rax, 48(%rsp)");
@@ -585,16 +589,17 @@ void finishBranchFunction(Module &M) {
   verifyFunction(*branchFunction);
 }
 
-bool WMBranchFunctionAlt::runOnModule(Module &M) {
+llvm::PreservedAnalyses
+WMBranchFunctionAlt::run(llvm::Module &M, llvm::ModuleAnalysisManager &AM) {
   if (!checkTarget(M)) {
     errs() << "Currently this pass only supports x86_64 targets.\n";
     errs() << "Watermark was not embedded into the program.\n";
-    return false;
+    return PreservedAnalyses::all();
   }
 
   if (!generateWatermark()) {
     errs() << "Watermark was not embedded into the program.\n";
-    return false;
+    return PreservedAnalyses::all();
   }
 
   // create branchFunction
@@ -604,7 +609,7 @@ bool WMBranchFunctionAlt::runOnModule(Module &M) {
   prepareJMPs(M);
   if (jmpCount < 3) {
     errs() << "\nToo few JMP instructions to embed the watermark.\n\n";
-    return false;
+    return PreservedAnalyses::all();
   }
   generateJmpList();
 
@@ -617,6 +622,7 @@ bool WMBranchFunctionAlt::runOnModule(Module &M) {
 
   generateJmpTable(M, wmBlocks);
   finishBranchFunction(M);
+  errs() << "embedded watermark 1 times\n";
 
 #if WM_ENV_DEV
   errs() << "####################\n";
@@ -628,32 +634,22 @@ bool WMBranchFunctionAlt::runOnModule(Module &M) {
   errs() << "####################\n\n";
 #endif
 
-  return true;
+  return PreservedAnalyses::none();
 }
 
-/**
- * legacy pass manager registration
- */
-static RegisterStandardPasses RegisterWMBranchFunctionAltPass(
-    PassManagerBuilder::EP_ModuleOptimizerEarly,
-    [](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-      PM.add(new WMBranchFunctionAlt());
-    });
-static RegisterStandardPasses RegisterWMBranchFunctionAltPass0(
-    PassManagerBuilder::EP_EnabledOnOptLevel0,
-    [](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-      PM.add(new WMBranchFunctionAlt());
-    });
-
-char WMBranchFunctionAlt::ID = 0;
-
-// Register the pass - required for (among others) opt
-static RegisterPass<WMBranchFunctionAlt> X(/*PassArg=*/"watermark",
-                                           /*Name=*/"Watermark Pass",
-                                           /*CFGOnly=*/false,
-                                           /*is_analysis=*/false);
-
-// INITIALIZE_PASS_BEGIN(Watermark, "watermark", "Schumi's Watermark", false,
-// false) INITIALIZE_PASS_DEPENDENCY(LazyValueInfoWrapperPass)
-// INITIALIZE_PASS_END(Watermark, "watermark", "Schumi's Watermark", false,
-// false)
+extern "C" LLVM_ATTRIBUTE_WEAK llvm::PassPluginLibraryInfo
+llvmGetPassPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, "pcp-mark", LLVM_VERSION_STRING,
+          [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](auto, ModulePassManager &MPM, auto) {
+                  MPM.addPass(WMBranchFunctionAlt());
+                  return true;
+                });
+            // this one is needed for clang
+            PB.registerPipelineEarlySimplificationEPCallback(
+                [](ModulePassManager &MPM, auto, auto) {
+                  MPM.addPass(WMBranchFunctionAlt());
+                });
+          }};
+}

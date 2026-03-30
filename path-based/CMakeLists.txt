@@ -12,6 +12,6 @@ if (${LLVM_VERSION_MAJOR} VERSION_GREATER_EQUAL 10)
     set(CMAKE_CXX_STANDARD 17)
 endif ()
 
-add_library(WMBranchFunction SHARED llvm_pass/WMBranchFunction.cpp llvm_pass/WMBranchFunction.h)
+add_library(WMBranchFunction SHARED llvm_pass/WMBranchFunctionAlt.cpp llvm_pass/WMBranchFunctionAlt.h)
 
 target_link_libraries(WMBranchFunction "$<$<PLATFORM_ID:Darwin>:-undefined dynamic_lookup>")

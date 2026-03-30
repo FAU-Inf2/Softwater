@@ -6,12 +6,11 @@
 #define LLVM_PASSES_WMBRANCHFUNCTIONALT_H
 
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/InitializePasses.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include <llvm/IR/Analysis.h>
 
 #define DEBUG_TYPE "watermark"
 
@@ -25,19 +24,14 @@ using namespace llvm;
 // Legacy PM interface
 //------------------------------------------------------------------------------
 namespace {
-struct WMBranchFunctionAlt : public ModulePass {
+struct WMBranchFunctionAlt : public llvm::PassInfoMixin<WMBranchFunctionAlt> {
   static char ID;
-  WMBranchFunctionAlt() : ModulePass(ID) {
+  WMBranchFunctionAlt() {
     errs() << "Constructing Watermark pass...\n";
     // initializeWatermarkPass(*PassRegistry::getPassRegistry());
   }
 
-  /**
-   *
-   * @param M
-   * @return true if the module has been modified
-   */
-  bool runOnModule(Module &M) override;
+  llvm::PreservedAnalyses run(llvm::Module &M, llvm::ModuleAnalysisManager &AM);
 };
 } // namespace
 
