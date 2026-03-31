@@ -11,6 +11,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 #include <llvm/IR/Analysis.h>
+#include <llvm/Support/CommandLine.h>
 
 #define DEBUG_TYPE "watermark"
 
@@ -26,6 +27,7 @@ using namespace llvm;
 namespace {
 struct WMBranchFunctionAlt : public llvm::PassInfoMixin<WMBranchFunctionAlt> {
   static char ID;
+  static llvm::cl::opt<std::string> WMMessage;
   WMBranchFunctionAlt() {
     errs() << "Constructing Watermark pass...\n";
     // initializeWatermarkPass(*PassRegistry::getPassRegistry());

@@ -1,0 +1,864 @@
+Introduction
+The task of this thesis is to choose one existing watermarking algorithm
+and implement it in the context of the LLVM project . The LLVM project
+aims to provide efficient compiler and toolchain technologies. It has
+started as a research project at the University of Illinois  and is now
+developed by many people as an open-source project . The goal is to
+extend existing LLVM tools or structures to provide an automated
+watermarking process during compilation. The approach of this thesis
+extends the LLVM tool opt used by the LLVM project to analyze and
+optimize source code. opt can be extended by writing an LLVM pass which
+can be described as a plugin that implements additional analysis,
+optimization, or transformation. An LLVM pass must define a scope it
+will be used in. The widest scope is the module that represents the
+whole program. Other scopes can be structures like functions or loops.
+
+This thesis is based on a dynamic path-based approach proposed by   in
+2004. The algorithm embeds a watermark into the branching behavior of a
+program. It splits one unconditional jump instruction such that control
+flow does not directly translate to the jump target. Instead, it jumps
+through well-defined locations in the text section of the executable
+which encodes the watermark. To execute these jumps, the algorithm
+inserts a so-called branch function. This function manipulates the next
+instruction pointer value to transfer the program execution to an
+address according to a jump table. Thus, the algorithm adds a table to
+the binary holding jump target addresses. The function obfuscates the
+control flow making it hard to analyze the marked executable statically.
+However, a dynamic analysis reveals the original control flow making the
+basic algorithm, presented by , not resilient against attacks that try
+to remove the watermark. To extract the watermark, the recognition
+algorithm dynamically traces the program execution to find a jump
+sequence caused by the branch function. The algorithm evaluates the
+trace comparing the jump targets in this sequence with each other and
+decodes the watermark.
+
+The approach developed in this thesis has to challenge a few aspects.
+First, the original embedding algorithm was designed to be used on
+already compiled binaries. Using the algorithm in the context of LLVM
+creates one major issue. The LLVM tool opt works with a
+target-independent intermediate code representation that is highly
+abstracted concerning low-level target machine information. This means,
+at the time of embedding, there is no information about the addresses of
+the instructions. Therefore, it is not trivial to construct a jump table
+containing the jump target addresses. It limits the complexity of the
+algorithm. Furthermore, the approach of this thesis needs to implement
+an LLVM pass that acts on the whole module. However, LLVM documents only
+the process of writing an LLVM function pass . Information deviating
+from this is rare or not present on the internet or in the literature
+but is essential to implement an automated watermarking process.
+
+The approach of this thesis will provide solutions to these challenges
+and contribute to existing research concerning watermarking using LLVM.
+The LLVM project allows using one implementation of a watermarking
+algorithm with multiple programming languages and target computer
+architectures. However, not many publications exist on this subject yet.
+
+This thesis is structured into six chapters. In the following chapter, I
+will go into existing research related to path-based watermarking
+methods and watermarking methods using LLVM. Then, chapter 3 will
+describe the background and the environment in which the approach is
+implemented. Chapters 4 and 5 describe and evaluate the implementation,
+and chapter 6 concludes the approach of this thesis.
+
+Related Work
+
+Watermarking has been practiced in a great variety in the past to this
+day. One of the first documented software watermarking methods  was
+described by   in a patent in 1996. It presents an algorithm that
+reorders the basic blocks of an executable to encode a unique signature.
+Thus this method is statically modifying a binary while preserving the
+original functionality of the watermarked program. In their paper,  
+classify this method as a reordering-based approach. There are different
+types of approaches, like path- or branch-based, obfuscation-based, or
+graph theoretic-based ones, to name a few. All of these approaches
+implement either a static or a dynamic watermarking method.
+
+  proposed one of the first dynamic watermarking techniques named
+"Dynamic Graph Watermarking". This method embeds a watermark in the
+topology of a dynamically built data structure on the heap.
+
+This thesis’s watermarking algorithm is a dynamic path-based approach
+using the llvm-ir. Therefore, this chapter will first discuss some other
+dynamic path-based watermarking methods, and then some techniques using
+the llvm-ir.
+
+Path-based approaches
+
+According to , the first path-based watermarking method was presented by
+  in 2004. Their approach embeds a watermark into an executable by
+redirecting unconditional jump instructions using a branch function.
+This approach is the basis of this thesis’s implementation.
+
+In 2005,   presented a hybrid static-dynamic attack against the
+watermarking algorithm proposed by . This attack uses tools like GDB,
+the GNU debugger, to trace the program execution and behavior in order
+to entirely remove the usage of the branch function.
+
+Another approach based on the one from was made by  . They extended the
+branch function to create a fingerprint mark in addition to an
+authorship mark. This makes it possible to trace back the original
+acquirer of a program’s instance after an illegal redistribution. The
+fingerprint branch function can redirect the control flow not only from
+unconditional branches but also from conditional jump instructions.
+Further, the function computes a key with every call used to check the
+integrity of the particular branch target.
+
+In 2006,   presented an automated attack against the watermarking
+algorithm proposed by . It uses subtractive and watermark-replacement
+attacks utilizing debugging tools to remove the fingerprint and
+integrity check implemented by the fingerprint branch function. Later,
+in 2007, they proposed an improved embedding algorithm  than that
+described by . Their approach increases the embedded watermark’s stealth
+by providing security against debugging attacks discussed in their
+previous paper from 2006.
+
+As stated by , the next published research concerning path-based
+approaches was by   in 2017. They introduce control flow obfuscation to
+embed a watermark into a program. The algorithm creates a hidden
+execution path by connecting obfuscated branches with the help of a
+neural network module. Due to the obfuscation, the watermarked
+structures are easy to recognize. Comparable to the implementation of
+this thesis, these manipulated structures are unusual. A standard
+compiler would not generate such code. This watermark’s strength relies
+on the complexity of the branch obfuscation, making it hard to reverse
+engineer them.
+
+In their paper,   presented a strong watermarking method using a
+semantic-integrated approach. This method is based on the one by . It
+embeds a neural network module into the executable which calculates
+branch targets at runtime. The strength of the watermark depends on
+whether this neural network module can be reverse-engineered or not.
+This requires the neural network’s rules to be extracted which is proved
+to be an NP-hard problem.
+
+Approaches using LLVM IR
+
+The watermark techniques from the last section embed the watermark into
+an already compiled binary. The approaches mentioned in this section
+embed a watermark using the llvm-ir. Likewise the approach of this
+thesis. This means the embedding algorithms are applied to the source
+code. Theoretically, since the llvm-ir is target-independent, the
+embedded watermark can be used on multiple architectures using one
+codebase.
+
+In their paper,   propose three methods to embed a watermark into
+llvm-ir. All presented methods implement reordering-based approaches
+manipulating the order of instructions, basic blocks, and functions.
+However, the paper does not provide an extraction method and does not
+evaluate the resilience of the presented watermarking methods against
+attacks.
+
+Recently, in 2020,   proposed a dynamic watermarking technique based on
+an approach from   using control flow obfuscation. The method embeds a
+watermark into the execution state of a program using Shamir’s secret
+sharing scheme and collatz conjecture. To extract the watermark, they
+instrument the original llvm-ir and apply this to the watermarked
+program. The collatz function is hard to find in the marked executable
+making the watermark relatively strong due to its stealth.
+
+Environment
+
+This chapter describes the working environment of this thesis. The main
+part of it is the LLVM project , which will be extended in order to
+insert watermarks during the compilation process. In this chapter, I
+will emphasize some parts of the LLVM project and how I use them to
+embed a watermark.
+
+The LLVM project contains open-source compiler and toolchain
+technologies that can be used to optimize and generate code. The focus
+of this thesis is on Clang, the LLVM C, C++, and Object-C compiler and
+the LLVM Core libraries. The latter provides utilities for
+target-independent optimization and code generation, and most of the
+LLVM tools are build around them.
+
+In their book "Getting Started with LLVM Core Libraries"   describe that
+the LLVM tools are organized in a frontend and a backend. The frontend
+converts source code into the llvm-ir. On this abstract level, tools
+like opt can run multiple code optimizations, which are implemented in
+so-called llvm-ir passes. When this is done, the backend converts the
+llvm-ir into object code or assembly.
+
+The approach of this thesis extends the LLVM frontend by providing an
+additional llvm-ir pass. In the following sections, I will describe the
+llvm-ir, focusing on the structures that I used for the approach, and
+then explain how the implemented pass can be used with the LLVM project.
+
+LLVM IR
+
+The LLVM Core libraries work with an intermediate code representation
+called llvm-ir. The llvm-ir is syntactically similar to an assembly
+language, but target-independent. This means that the LLVM tools can
+produce code for different architectures.
+
+The IR is structured as follows: A program is represented as a module. A
+module contains metadata, constant variables, global variables, and
+functions. A function is built out of basic blocks, and a basic block
+consists of instructions. This llvm-ir is one part of the implementation
+of the approach in this thesis and will be used to manipulate the source
+code of the input program.
+
+Listing [lst:llvm-ir-example] shows a simple example of an llvm-ir
+module. It represents an add function that takes one 32-bit integer as
+an input parameter and returns a 32-bit integer as a result of an add
+operation.
+
+    source_filename = "example.c"
+    target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
+    target triple = "x86_64-pc-linux-gnu"
+
+    @global_var = dso_local global i32 4, align 4
+
+    define dso_local i32 @add(i32) #0 {
+    entry:
+      %2 = alloca i32, align 4
+      store i32 %0, i32* %2, align 4
+      %3 = load i32, i32* @global_var, align 4
+      %4 = load i32, i32* %2, align 4
+      %5 = add nsw i32 %3, %4
+      ret i32 %5
+    }
+
+    attributes #0 = { noinline nounwind optnone uwtable ... }
+
+The metadata of the module contains some information about the source
+file and the target machine. The target triple tells about the target
+cpu architecture. The target datalayout gives information about the bit
+width of data types.
+
+Functions and global variables can be defined locally in the module or
+refer to an external definition. This way, for example, if the code in
+the listing [lst:llvm-ir-example] would use the C standard library
+function printf(), this function would be defined in the module only by
+its function header. Also, each function may have attributes that are
+defined at the end of the LLVM module.
+
+The llvm-ir uses the ssa form. This means, that each variable is defined
+and assigned once. It will not be reassigned. The ssa form makes it
+easier to optimize the code since it is a simple task to trace back a
+variable. This way, this representation helps with constant propagation
+and dead code elimination, to name a few .
+
+Globals and constants
+
+Global and globally defined constant variables in llvm-ir behave as
+expected: Global variables can be accessed and modified from every
+function in the module, and globally defined constants act the same but
+are immutable. Both are defined in the module level, the same level
+where functions are defined. This approach uses global constants as a
+placeholder for values that are not known in this abstracted and
+target-independent level. Later in the compilation process in the LLVM
+backend, when more target-specific code is generated, these values can
+be determined. To be more specific, the placeholder in this constant
+variable will be created through an llvm-ir function called
+blockaddress() . This function returns the address of a basic block,
+which can not be determined while in the LLVM frontend. I will go into
+this in more detail later in chapter 4 "".
+
+Basic Blocks
+
+One level deeper, we come to the basic blocks. Every function consists
+of at least one basic block, and every basic block must have at least
+one predecessor block, except the first one. Furthermore, every basic
+block has a sequence of instructions, with the last one being a
+so-called terminator. A terminator instruction can be, for instance, a
+branch to another basic block in this function or a return instruction.
+Each block has a name, which is unique for the parent function. This
+name can be used with the previously mentioned blockaddress() function.
+
+PHI nodes
+
+PHI nodes are a consequence of the ssa form. They are needed in
+situations where a variable can be assigned a different value depending
+on the control flow. This means the value can not be determined
+statically. A PHI node must be defined at the start of a basic block as
+the first instruction, and it defines one value for each predecessor
+block of its parent basic block. The value can be a variable or an
+immediate value.
+
+Inline Assembly
+
+This thesis’s approach uses two structures that act as a symbolic value
+in the LLVM frontend and get evaluated in the LLVM backend, where the
+code reaches a more target-specific level. The LLVM function
+blockaddress() is one of these structures. The other one is the inline
+assembly.
+
+    call void asm sideeffect "push %rbp", ""()
+
+Listing [lst:llvm-inline-asm] shows that in llvm-ir inline assembly is
+represented as a function call. It can take input parameters to use with
+constraints and return a value with a predefined data type. It is to
+emphasize that this inline assembly call is target-specific.
+
+Implementation
+
+In the previous chapters, I described the environment this approach is
+working on and what type of watermarking method I will use in this
+thesis. This chapter will explain in detail how the method works, how it
+is implemented, and how this watermarking method can be used within the
+LLVM project.
+
+The approach of this thesis is implementing a method that was presented
+by   in 2004. They describe a path-based watermarking technique using a
+construct called branch functions. I will call the implemented method
+the branch function method.
+
+The approach of this thesis is implemented and tested on an x86_64 Linux
+machine.
+
+Basic algorithm
+
+The idea of the basic algorithm, proposed by , is to embed a watermark
+into the control flow of a program by using a branch function. A branch
+function is a function that is called in a normal way by the executing
+program. Formally it takes no arguments and returns a void data type,
+like listing [lst:branch-function-call] shows. However, actually, it
+manipulates the return address such that the program will resume at a
+different address than the caller function intended. That way, the
+control flow can be manipulated at runtime and gets obfuscated.
+
+    call void @branchFunction()
+
+In the first step, the embedding algorithm chooses one unconditional
+jump instruction and replaces it with a call to the branch function. The
+branch function maps that call to the original jump destination by using
+a minimal perfect hash table during runtime. This hash table can be
+generated in many ways, simple or complicated, but the basic idea is the
+following: A call instruction to a function func in assembly language
+will execute two instructions, pushq %rip and jmp func. Thus the caller
+function saves the next instruction pointer %rip on the stack and jumps
+to the start of the branch function. The branch function uses that
+instruction pointer to calculate the destination address index in the
+hash table. Formally, the mapping of the branch function can be
+described as follows:
+d = T(h(s)) + s
+with T representing the hash table, h the hash function, s the saved
+instruction pointer, and d the destination address. After the
+calculation, the branch function overrides the saved instruction pointer
+with the destination address d and returns, which causes the control
+flow to move on from that address d.
+
+The second step embeds the actual watermark, which is encoded as a bit
+sequence. One bit is represented by a call to the branch function and
+whether the destination address that the branch function navigates to is
+higher or lower than the address of the saved instruction pointer. A
+higher destination address encodes a 1 and a lower one a 0.
+
+In order to embed the watermark, the algorithm splits the prepared jump
+from step one into w + 1 jumps, with w being the length of the bit
+sequence.
+$$\begin{gathered}
+    start \rightarrow dest\\
+    \downarrow\\
+    start \rightarrow a_{1} \rightarrow a_{2} \rightarrow a_{3} \rightarrow \dots \rightarrow a_{w} \rightarrow dest\\
+\end{gathered}$$
+Each a_(i), i ∈ {1, 2, 3, …, w}, is a call to the branch function and is
+placed in the binary after an unconditional jump instruction. This
+placement is chosen because the original control flow can never reach
+these function calls. Figure 4.1 shows an example by encoding the bit
+sequence ‘1001‘. The left code shows the state before the embedding. The
+locations a_(i) indicate possible embedding locations. Each of these
+embedding locations can hold any amount of branch function calls. The
+code to the right describes a possible watermark embedding. The
+locations in grey show the jump target of a particular branch function.
+
+Approach
+
+After I realized that my first approach was not able to implement such a
+jump table like described by Collberg et al., I had to change the
+functionality of the jump table. Since the main problem was that I have
+no information about the final binary addresses during the optimization
+phase of the LLVM compiler, I needed to build the jump table in a manner
+where the exact addresses do not matter. The idea was to use labels as
+symbolic values since labels get replaced with the actual address in the
+final binary. To achieve that, I used the LLVM IR function
+blockaddress() . This function takes an LLVM basic block pointer as an
+input parameter and returns that basic block’s address.
+
+This function is available in the llvm-ir and in the llvm-ir pass itself
+as a C++ function . In C++ this function is implemented in the
+BlockAddress class as BlockAddress::get(BasicBlock *BB). First, I tried
+to compute the address from this function to build a hash table, but
+these addresses do not act as symbolic values during optimization time,
+thus can not be used for calculation.
+
+The solution to this is to assign the result of that function to an LLVM
+global constant variable. This way, the result from the LLVM function
+blockaddress() can be used as a symbolic value by using the constant
+variable. I save these global constants in an array in the LLVM IR,
+which results in an array of addresses that is present in the .rodata
+section of the binary. It holds the source srcAddr and target destAddr
+addresses of each call to the branch function and has a form like this:
+[srcAddr₀, destAddr₀, srcAddr₁, destAddr₁, …, srcAddr_(n), destAddr_(n)]
+During runtime, the branch function in the watermarked program will
+determine the jump target by searching for the srcAddr in the array.
+
+This array is a very simple implementation of this approach. I could
+arrange the address pairs in a more complex way to be more robust
+against attacks. However, it’s not worth the effort because, to
+understand that array’s structure, the attacker has to trace the program
+execution, which will expose the address arrangement regardless of the
+complexity of the array implementation.
+
+Bit encoding and decoding
+
+The watermarking algorithm of this thesis embeds a watermark according
+to a bit sequence. This bit sequence is generated from an text provided
+by the user through a file that must be placed in the same folder as the
+shared object containing the llvm-ir pass. The text in this file is the
+watermark that will be embedded into the executable.
+
+To encode the text, the algorithm converts each ascii character into its
+byte representation in left-to-right inverted binary format. Thus each
+character from the watermark text adds 8 bits to the bit sequence. For
+example, the watermark text "AB" contains two characters. The first
+character A has a hexadecimal value 0x41, which is 0100 0001 in binary
+representation. Now the bits get inverted, which will result in the bit
+sequence 1000 0010. Finally, the encoded text "AB" has the following bit
+sequence: 1000 0010 0100 0010.
+
+The watermark extraction process will output such a bit sequence. To
+decode that sequence, the algorithm will split it into 8-bit chunks,
+invert each chunk, and convert that 8-bit value into its ascii character
+representation.
+
+Embedding
+
+Three prerequisites have to be satisfied to start with the embedding
+process. If these are not met, the compilation process will continue
+without embedding a watermark. First, the target architecture must be
+x86_64. Although the LLVM IR is target-independent, the embedding
+algorithm needs to produce target dependent code using llvm-ir inline
+assembly. However, since the target machine is known during the pass
+execution, the watermarking pass can be extended to support multiple
+architectures. The pass just has to create the appropriate inline
+assembly. Second, the watermark has to be provided by the user in a text
+file, as described in subsection 4.3.1. The watermark must contain at
+least one ascii character and can include any multiline text.
+Theoretically, the watermark can have an unlimited length, but depending
+on the location used to embed the watermark, a long watermark can
+significantly slow down the program execution. I will discuss this in
+chapter 5 "". The third and the last prerequisite is that the embedding
+algorithm needs at least three jump instructions in the final binary.
+Like I have described in section 4.1, one jump instruction has to be
+split. This jump instruction will be the entry point for the encoded
+watermark. The algorithm of this thesis is designed this way, so it does
+not use this entry point jump instruction as a valid watermark embedding
+location. So at least two other jump instructions must be present in the
+final binary to allow the forward and backward jumps, which encode the
+bit sequence of the watermark.
+
+After all prerequisites are met, the embedding algorithm starts to
+manipulate the llvm-ir. Figure 4.2 shows an overview of the embedding
+process. In the following parts, I will go through the steps listed in
+the embedding algorithm Embed(W) and describe each point in detail.
+
+Embed(W) – 1. Create empty branch function
+
+The first step of the embedding algorithm is to create a new llvm-ir
+function and insert it into the LLVM module. This is needed to have a
+reference for the ’call bf()’ instruction. I leave the function body
+empty because the branch function needs to reference the global constant
+array, which will be created later in step 5.
+
+Embed(W) – 2. Calculate distribution
+
+This step distributes the branch function calls that encode the
+watermark W. The distribution algorithm assigns one call per bit in the
+bit sequence of the watermark to a random jump in the final binary that
+is suitable for that specific bit. The distribution algorithm ensures
+that the assignment is balanced across all used unconditional jumps. The
+algorithm generates a list, which holds information about the position
+and the order of each branch function call that corresponds to a bit in
+the bit sequence. Like Collberg et al. described, the algorithm has to
+split one unconditional jump to embed the watermark. The algorithm of
+this approach chooses always the first jump instruction that can be
+manipulated by it. In other words, the algorithm will choose the one
+jump instruction that will have the lowest address in the final binary.
+
+Not all unconditional branches in the llvm-ir module can be used for
+this process because some branches will be omitted in the final,
+compiled binary or cause invalidation of the llvm-ir when used by the
+embedding algorithm. The embedding algorithm has three criteria to
+determine if an unconditional branch can be used for the embedding
+process. First, the algorithm avoids branches that exist in the llvm-ir
+but will be omitted during the compilation, thus will not exist in the
+final binary. This situation occurs when the target basic block of an
+unconditional branch is the next node in the parent function’s
+control-flow graph. Two basic blocks in this context likely get merged
+during the compilation process. The other criteria relate to the target
+basic block only. In the next embedding step, the algorithm needs to
+change the target of an unconditional branch. This means that the
+original target basic block loses one predecessor block. If this happens
+to all its predecessors, this block will invalidate the module because
+the llvm-ir requires every basic block to have at least one predecessor,
+except the first one of a function. Thus the embedding algorithm will
+ignore unconditional branches that target a basic block, which
+predecessors are all valid unconditional branches according to the other
+criteria. The third and last criterion is to avoid target basic blocks
+with LLVM PHI nodes. A PHI node holds references to other basic blocks
+and must have one argument for each predecessor of its parent basic
+block. When a predecessor is removed by the embedding algorithm, the PHI
+node can no longer satisfy this requirement, and the LLVM module
+invalidates.
+
+Embed(W) – 3. Insert before every BR a ’call bf()’
+
+In section 4.1, I described the basic embedding algorithm presented by
+Collberg et al. This basic algorithm selects one unconditional jump
+instruction in the binary and splits it to embed the watermark. All
+other jump instructions remain the same.
+
+In this thesis’s approach, the algorithm transforms every unconditional
+jump instruction into a call instruction to the branch function. This
+contributes to the robustness of the watermark, which I will discuss
+later in chapter 5 "".
+
+In earlier approaches, I replaced the branch instructions with branch
+function calls. This broke the llvm-ir module because it deleted the
+LLVM terminator instruction of that basic block and the reference to the
+target basic block and invalidated the module. Then I tried to solve
+this by inserting the branch function call instruction right before the
+jump instruction and replacing the jump with another terminator
+instruction called unreachable . This still deleted the reference to the
+target basic block but did not invalidate the module. That worked as
+long as I used only the LLVM opt tool to test the watermarking pass but
+produced a segmentation fault when used with clang, which was the
+intended usage for this pass. So I decided to leave the original
+unconditional jump instructions but redirect the target every time to
+the particular function’s second basic block. This way, all information
+about the original control flow is still lost, and it remains
+obfuscated.
+
+Every time the algorithm inserts a branch function call, it splits the
+basic block right before that call. The split makes each branch function
+call the first instruction in a basic block, which means that the
+address of the basic block is the same as the address of that call
+instruction. With this, the embedding algorithm is able to save the
+source address of an unconditional jump, which is the address of the new
+basic block after the split, and the destination address, which is the
+address of the basic block of the original branch instruction target.
+
+Embed(W) – 4. Insert ’call bf()’ according to distribution in 2.
+
+Now the llvm-ir module is prepared to insert the branch function calls
+that encode the watermark. This step connects to step 2, where the
+distribution of the branch function calls was calculated. Like in the
+previous step, the embedding algorithm splits the basic block with every
+branch function call insertion to be able to save the source address of
+that jump. The destination address is the basic block containing the
+next branch function call instruction according to the distribution from
+step 2.
+
+Embed(W) – 5. Generate global constant array
+
+This step puts the jump information into the module. Like I described
+earlier in this subsection, the information is saved in a global
+constant array. The embedding algorithm first creates an LLVM global
+variable for each source and destination address, saved in the steps 3
+and 4, using the LLVM function BlockAddress::get(BasicBlock *BB). This
+creates an llvm-ir entry similar to the one in
+listing [lst:llvm-gv-blockaddress]. @func is the parent function of the
+basic block %bb_label.
+
+    @GLOB_VAR = constant i8* blockaddress(@func, %bb_label)
+
+The blockaddress() function will be evaluated later in the LLVM backend
+at a point where the compiler knows the actual address of the particular
+basic block. Thus the global variable @GLOB_VAR acts as a symbolic value
+for the basic block address.
+
+Finally, the algorithm generates the global constant array containing
+all the global variables.
+
+Embed(W) – 6. Create branch function body
+
+At this point, the LLVM module contains the global array, which will be
+used by the branch function during runtime. The embedding algorithm
+creates the function body in the llvm-ir using LLVM inline assembly,
+which implements two functionalities.
+
+    <branchFunction>:
+        push   rax
+        push   rsi
+        push   rdi
+        push   rcx
+        push   rdx
+        push   rbx
+        mov    rax,QWORD PTR [rsp+0x30]
+        mov    DWORD PTR [rsp-0xc],0x0
+        mov    QWORD PTR [rsp-0x18],rax
+    .loop_head
+        cmp    DWORD PTR [rsp-0xc],0xc92        ; iterate over array
+        jge    .end
+        movsxd rax,DWORD PTR [rsp-0xc]
+        mov    rax,QWORD PTR [rax*8+0x425160]   ; array in .rodata
+        mov    rax,QWORD PTR [rax]
+        add    rax,0x5                          ; addr of next instr
+        mov    rcx,QWORD PTR [rsp-0x18]
+        cmp    rax,rcx
+        je     .loop_end
+        mov    eax,DWORD PTR [rsp-0xc]
+        add    eax,0x2                          ; next address pair
+        mov    DWORD PTR [rsp-0xc],eax
+        jmp    .loop_head
+    .loop_end
+        mov    eax,DWORD PTR [rsp-0xc]
+        add    eax,0x1
+        movsxd rcx,eax
+        mov    rcx,QWORD PTR [rcx*8+0x425160]   ; array in .rodata
+        movsxd rdx,eax
+        mov    rcx,QWORD PTR [rcx]
+        mov    QWORD PTR [rsp-0x8],rcx
+        mov    rax,QWORD PTR [rsp-0x8]
+        mov    QWORD PTR [rsp+0x30],rax
+        pop    rbx
+        pop    rdx
+        pop    rcx
+        pop    rdi
+        pop    rsi
+        pop    rax
+        mov    QWORD PTR [rsp-0x20],rdx
+    .end:
+        ret
+
+First, the inline assembly is needed to create the function prologue and
+epilogue. The prologue saves more than the typical callee saved
+registers to ensure that the function does not break the program
+execution. Then the inline assembly produces code to be able to
+manipulate the next instruction pointer after the function returns.
+
+Listing [lst:branch-function] shows the final implementation of the
+branch function in assembly language. Line 8 and 10 save the next
+instruction pointer saved by the caller function onto the stack. These
+lines are created by an LLVM inline assembly, which makes that value
+available to the LLVM pass by saving the return value of the inline
+assembly call in a variable IP. The value in IP acts as a symbolic value
+for that address. The function then loops through the global array and
+matches IP against the first address of each address pair in the array.
+When a match is found, the function continues at line 26, fetches the
+second address of the found address pair, which is the destination of
+that particular jump and overrides the saved next instruction pointer by
+using another LLVM inline assembly in line 34. After the epilogue, the
+control flow will resume at the overridden next instruction pointer.
+
+It is not possible to generate the branch function only by using inline
+assembly because, at the time of building that function, the LLVM pass
+needs to reference the global constant array, which is an LLVM entity at
+this point.
+
+Like I described earlier in this chapter, the global constant array has
+a form like this:
+[srcAddr₀, destAddr₀, srcAddr₁, destAddr₁, …, srcAddr_(n), destAddr_(n)]
+As described above, the branch function has a complexity of O(n) because
+it iterates over the global array linearly. However, the embedding
+algorithm can be modified such that it generates an ordered array;
+ordered by srcAddr_(i). This makes it possible to improve the complexity
+by using a binary search on the array to find the matching address.
+Although each srcAddr_(i) is a symbolic value, they relate to each other
+in the following way: Assuming two actual addresses in the final binary
+relate to each other like this
+srcAddr_(i) < srcAddr_(j)
+then the symbolic values in the llvm-ir relate in the same way because
+srcAddr_(i) is positioned earlier in the control flow graph of the
+llvm-ir module as srcAddr_(j). With this implementation, the branch
+function can reach a complexity of O(log n).
+
+Extraction
+
+The branch function method embeds a dynamic watermark into an
+executable. To extract an embedded watermark, the marked program needs
+to be executed, and the control flow has to be traced to detect the
+watermark. In their paper, Collberg et al. describe the extraction
+process as follows: First, they locate the jump instruction jmp_(start),
+split by the embedding algorithm, and its original target jmp_(end).
+These two locations need to be passed manually to the extraction
+algorithm. Then they use a tracer tool, which supports hardware
+single-stepping, to execute the marked program. This tool will produce a
+dynamic trace of the executed instructions from first reaching
+jmp_(start) until reaching jmp_(end). They analyze the produced trace to
+identify the branch function. After the branch function is identified,
+they analyze the trace again to get a list of address pairs
+(src_(i), dest_(i)). src_(i) is the source address from which the branch
+function has been called, and dest_(i) is the destination address to
+which the branch function is redirecting. Then they compare each of
+these address pairs to determine the corresponding bit of the embedded
+watermark. If dest_(i) is lower than src_(i), they extract a 0; if
+dest_(i) is greater than src_(i), a 1.
+
+This thesis’s approach implements a similar extraction algorithm. To
+automate the extraction, I use a python script, and to trace the
+execution, I use GDB, the GNU debugging tool .
+Listing [lst:wm-extraction] shows how to extract a watermark from a
+program prog. The idea is to start GDB with the marked program and use
+the GDB option -x FILE to execute GDB commands from the python script,
+which implements the extraction algorithm.
+
+    #!/bin/bash
+    gdb -x extract.py prog
+
+According to Collberg et al., the algorithm first has to locate the
+jmp_(start) address. As I explained in the previous subsection, this is
+the branch function call instruction with the lowest address in the
+binary. To get that address, the python script uses GDBs disassemble
+command to disassemble the text section of the executable. It then uses
+a regular expression search to find said instruction. This assumes that
+the binary is not stripped and that the script knows the branch
+function’s name. A stripped binary file does not contain any debug
+information. This means, all symbols are removed from the binary, unless
+they are necessary for the program execution. The disassemble command
+requires the program to run. So at this point, the python script sets a
+breakpoint at the beginning of the main function and starts the program
+execution.
+
+After the algorithm has determined the start address, it first executes
+step by step the main function until its stack frame is built. Then it
+sets the instruction pointer to the address of jmp_(start) and is
+therefore ready to trace the program execution. The python script saves
+the address pairs (src_(i), dest_(i)) as described by Collberg et al. as
+long as the next instruction right after the return from the branch
+function is another branch function call. Thus the extraction algorithm
+does not need to know the jmp_(dest) address to terminate the trace.
+
+Lastly, the algorithm extracts the bit sequence from the saved addresses
+in the same way as described by Collberg et al. and decodes that bit
+sequence into the original watermark ascii text using the decoding
+algorithm described in subsection 4.3.1.
+
+Limitations
+
+During the embedding of the watermark, the llvm-ir was the most limiting
+factor. It has a rigorous syntax, which does not allow much leeway when
+it comes to obfuscation. Since the embedding algorithm of this thesis
+needs to obfuscate the control flow of the program, it was not trivial
+to manipulate the llvm-ir. Besides the strict syntax of the intermediate
+representation, a limiting factor was the high abstraction level of the
+LLVM frontend. It has by design a minimal set of low-level information
+because it is target-independent. Therefore at the runtime of the
+llvm-ir pass, there is no information about the addresses the
+instructions will have in the compiled binary. So the embedding
+algorithm cannot create a hash table as Collberg et al. described in
+their approach. Furthermore it can not obfuscate the access to that data
+structure containing the jump target addresses needed by the branch
+function.
+
+Concerning the watermark extraction, the limiting factor was, that it
+has to be an automated process. To be able to automate the watermark
+recognition, the extraction algorithm needs at least to know the entry
+point of the encoded watermark. This means it needs to know how to find
+the address of the jump instruction that was split and surrounds the
+embedded watermark. Due to time limitations, I solved this by choosing
+the unconditional jump with the lowest address. It would be possible to
+find the entry point even though it is assigned to a random or rather
+unknown unconditional jump instruction by analyzing the marked program’s
+behavior after a call instruction. It would have to recognize the branch
+function first and then test every call to the branch function if it
+initiates a series of branch function calls or implements a normal jump.
+The former case would identify the entry point, assuming the instruction
+right before the found one is not a branch function call.
+
+The implementation of the extraction algorithm is designed in a manner
+that it needs to know the name of the branch function. Thus the marked
+executable must not be stripped. To be able to extract a watermark from
+a stripped binary, the algorithm needs to be able to recognize the
+branch function. In a scenario where the entry point is known to the
+algorithm, the recognition is trivial since the entry point locates a
+branch function call instruction. In the other case, the algorithm would
+have to analyze the executable to identify the branch function. Again,
+due to time limitations, the extraction algorithm of this thesis can
+only work on non stripped binaries.
+
+Conclusion
+
+This thesis implements a dynamic path-based watermarking algorithm based
+on an approach presented by  . The algorithm is wrapped into an LLVM
+module pass that can be used by LLVM’s compiler clang to automatically
+embed a given watermark into a program when compiling source code. It
+can be automatically extracted using GDB, the GNU debugger.
+
+The basic embedding algorithm proposed by embeds a watermark into the
+control flow of a compiled program using a branch function. The branch
+function manipulates its return address allowing it to redirect the
+control flow to any location in the executable. The algorithm first
+replaces one unconditional jump with a call to the branch function.
+Further, it splits that jump into additional jumps represented by branch
+function calls creating a call sequence terminating in the original jump
+target. Each call in this sequence encodes one bit of the watermark
+depending on its address relative to the one of its parent jump. A
+higher address encodes a 1, a lower address a 0. The branch function
+gets its information where to redirect the program execution to from a
+minimal perfect hash table that was inserted into the binary by the
+algorithm. This watermarking method was designed to embed a watermark
+into x86 binaries and Java byte code.
+
+The implementation of this thesis uses llvm-ir to embed a watermark into
+source code which makes it possible to use this watermarking method for
+various architectures. Using the llvm-ir, the embedding algorithm can
+use instruction addresses only as constant symbolic values which makes
+it not possible to calculate a hash table as proposed by the basic
+algorithm. Instead, the algorithm includes an array into the executable
+containing the jump information.
+
+The watermark can be automatically extracted using GDB which uses a
+python script that contains the extraction algorithm. The algorithm
+searches for the starting point of the embedded watermark, traces the
+program execution and evaluates the control flow to recover the embedded
+bit sequence. The ASCII watermark is encoded as such a bit sequence by
+left-to-right inverting eight bits per ASCII character.
+
+The llvm-ir was the most limiting factor in this thesis. Due to its
+strict syntax, control flow obfuscation is hard to implement. Any syntax
+violation causes an invalidation of the LLVM module which causes clang
+to terminate in an error state not embedding the watermark.
+
+This thesis evaluates the implementation in terms of credibility,
+robustness, transparency, resilience, data rate, and overhead. The
+credibility describes how reliable the watermark is in identifying the
+creator. Because the branch function method creates unambiguous and
+partly unique structures in the binary, the extraction is precise; thus
+highly reliable. The robustness describes how hard it is to remove the
+watermark. In contrast to the proposed basic algorithm, this approach
+improves the robustness by converting as much unconditional jump
+instructions as possible to hide the entry point to the embedded
+watermark. This conversion is limited by the llvm-ir syntax, as
+mentioned before. The benefit of unambiguous structures concerning
+credibility is a disadvantage concerning the transparency which
+describes how easy it is to detect watermarked code for an attacker.
+These structures are not produced by a standard compiler making them
+very conspicuous and easy to find. Furthermore, the resilience of the
+watermark was tested against additive and distortive attacks. Additive
+attacks can only be successful when not damaging the original watermark.
+Thus, the attacker can not remove or destroy the watermark with this
+technique, but it is possible to embed other watermarks. However, it
+still would be possible to extract the original one. The data rate
+describes how much information the embedded watermark can hold. This
+approach can save a constant value of one ASCII character per eight bit.
+Lastly, the overhead is proportional to the embedded watermark size in
+both the file size and the execution time. The file size increases by
+approximately 300 KiB when embedding an 8192-bit long watermark that
+encodes 1024 characters of ASCII text. Concerning the execution time,
+the presented implementation can slow down a marked program
+significantly when long watermarks are used. However, this thesis
+describes a method that improves the complexity of this algorithm from
+being O(n) to O(log n) which solves the problem of the high overhead in
+execution time.
+
+The approach of this thesis has successfully implemented a fully
+functioning and efficient watermarking algorithm using llvm-ir passes.
+The greatest advantage is that the LLVM pass works with all programming
+languages supported by LLVM without any adaption. Further, the
+implemented LLVM pass can be used for any target computer architecture
+supported by LLVM. However, when used for any other architecture than
+x86_64, this needs some minor adaptation of the used inline assembly to
+match the target instruction set.
+
+As described earlier, the algorithm can be improved in its overhead and,
+additionally, in the branch function’s complexity to make the function,
+thus the watermark, harder to remove. Due to its original design,
+however, there is not much leeway to further improve the resilience
+against attacks.
+
+In conclusion, the presented watermarking algorithm can be used within
+all types of projects that use LLVM as the compiler environment and want
+to embed a robust and efficient ASCII text-based watermark into their
+programs.

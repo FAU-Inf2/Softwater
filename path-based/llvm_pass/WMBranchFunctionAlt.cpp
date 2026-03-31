@@ -5,7 +5,6 @@
 #include "WMBranchFunctionAlt.h"
 
 #include <cmath>
-#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -34,6 +33,12 @@
 #define WM_MAX_SIGNATURE_LEN 1024
 
 using namespace llvm;
+
+llvm::cl::opt<std::string> WMBranchFunctionAlt::WMMessage(
+    "pathbased-message",
+    llvm::cl::desc("Specify the watermark that the path-based "
+                   "watermark embeds in the program"),
+    llvm::cl::value_desc("pathbased-watermark-message"));
 
 struct JMPs {
   BasicBlock *bb;
@@ -123,21 +128,8 @@ InlineAsm *createInlineAsm(Module &M, const char *asmCode,
  *      bitSignature
  *      bitSignatureLen
  */
-bool generateWatermark() {
-  char signature[WM_MAX_SIGNATURE_LEN + 1];
-  std::ifstream fSig;
-  fSig.open("watermark.txt");
-  if (!fSig) {
-    errs() << "File 'watermark.txt' not found.\nThis file must be placed in "
-              "the same directory as the LLVM pass.\n";
-    errs() << "This file contains the watermark that should be embedded into "
-              "the program.\n";
-    return false;
-  }
-
-  fSig.get(signature, WM_MAX_SIGNATURE_LEN + 1, EOF);
-
-  size_t sigLen = strlen(signature);
+bool generateWatermark(std::string signature) {
+  size_t sigLen = signature.size();
   if (!sigLen) {
     errs() << "The watermark must contain at least 1 character.\n";
     return false;
@@ -226,7 +218,7 @@ void saveJMP(BasicBlock *bb, BasicBlock *bbTarget, size_t idx) {
  */
 bool canManipDestBB(BasicBlock *B) {
   // skip basic blocks with phi nodes
-  //if (isa<PHINode>(B->begin())) {
+  // if (isa<PHINode>(B->begin())) {
   //  return false;
   //}
 
@@ -305,7 +297,6 @@ void prepareJMPs(Module &M) {
           // save reference to current JMP
           saveJMP(&B, dest, bfInsertCount++);
 
-          // replace JMP with `unreachable`
           irBuilder.SetInsertPoint(&I);
           irBuilder.CreateCall(branchFunction);
           setBrToBeginningOfFunction(F, I);
@@ -450,19 +441,25 @@ void generateJmpTable(Module &M, BasicBlock **wmBlocks) {
                            "BLOCK_DEST_" + std::to_string(idxJmp));
     addresses.push_back(gvStart);
     addresses.push_back(gvDest);
-
-    // get source and target from WM encoding `call branchFunction` and write to
-    // constant variable
     for (size_t idxWm = 0; idxWm < jmpList[idxJmp].size(); ++idxWm) {
       size_t idxStart = jmpList[idxJmp][idxWm];
       size_t idxDest = (idxStart + 1) % (bitSignatureLen + 1);
+
+      errs() << "Processing idxJmp=" << idxJmp << " idxWm=" << idxWm
+             << " idxStart=" << idxStart << " idxDest=" << idxDest << "\n";
+      errs() << "  wmBlocks[" << idxStart << "] = " << wmBlocks[idxStart]
+             << "\n";
+
       auto *gvWmStart =
           new GlobalVariable(M, ty, true, GlobalValue::PrivateLinkage,
                              BlockAddress::get(wmBlocks[idxStart]),
                              "WM_START_" + std::to_string(idxStart));
       GlobalVariable *gvWmDest;
       if (idxDest) {
-        // dest is next encoding basic block (e.g. BB#1 -> BB#2)
+        if (!wmBlocks[idxDest]) {
+          errs() << "Warning: wmBlocks[" << idxDest << "] is null, skipping\n";
+          continue;
+        }
         gvWmDest = new GlobalVariable(M, ty, true, GlobalValue::PrivateLinkage,
                                       BlockAddress::get(wmBlocks[idxDest]),
                                       "WM_DEST_" + std::to_string(idxDest));
@@ -597,7 +594,7 @@ WMBranchFunctionAlt::run(llvm::Module &M, llvm::ModuleAnalysisManager &AM) {
     return PreservedAnalyses::all();
   }
 
-  if (!generateWatermark()) {
+  if (!generateWatermark(WMMessage.getValue())) {
     errs() << "Watermark was not embedded into the program.\n";
     return PreservedAnalyses::all();
   }
@@ -609,6 +606,8 @@ WMBranchFunctionAlt::run(llvm::Module &M, llvm::ModuleAnalysisManager &AM) {
   prepareJMPs(M);
   if (jmpCount < 3) {
     errs() << "\nToo few JMP instructions to embed the watermark.\n\n";
+    // Remove the incomplete branch function before returning
+    branchFunction->eraseFromParent();
     return PreservedAnalyses::all();
   }
   generateJmpList();
@@ -618,7 +617,19 @@ WMBranchFunctionAlt::run(llvm::Module &M, llvm::ModuleAnalysisManager &AM) {
    * @branchFunction()`)
    */
   BasicBlock *wmBlocks[bitSignatureLen + 1];
+  // Initialize all pointers to nullptr
+  for (size_t i = 0; i < bitSignatureLen + 1; i++) {
+    wmBlocks[i] = nullptr;
+  }
   insertWatermark(M, wmBlocks);
+
+  // Debug: check which indices are null
+  errs() << "Checking wmBlocks initialization:\n";
+  for (size_t i = 0; i < bitSignatureLen + 1; i++) {
+    if (!wmBlocks[i]) {
+      errs() << "  wmBlocks[" << i << "] is null\n";
+    }
+  }
 
   generateJmpTable(M, wmBlocks);
   finishBranchFunction(M);
