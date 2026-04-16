@@ -5,7 +5,7 @@ The program still works as expected but by providing a key the hidden message ca
 This can be used for fingerprinting, copyrighting, and prove of ownership to deter software piracy.
 
 ## Building
-To build all watermark techniques and tools you need a installed LLVM 19, CMake and Make.
+To build all watermark techniques and tools you need a installed LLVM 20, CMake and Make.
 Export the LLVM install direction (e.g., `export LLVM_HOME=/usr/`), run `cmake -B build -S .`, and `make` in the build folder.
 
 ## Usage
