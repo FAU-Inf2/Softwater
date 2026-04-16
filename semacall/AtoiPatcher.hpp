@@ -1,8 +1,8 @@
-#define USE_POLYNOM
 #include "FunctionPatcher.hpp"
 #include <llvm/Support/CommandLine.h>
 #include <string>
 
+#define DONT_USE_POLYNOM
 struct AtoiPatcher : public FunctionPatcher {
   static llvm::cl::opt<std::string> AtoiWaterMarkKey;
   static llvm::cl::opt<std::string> AtoiWaterMarkVal;
@@ -129,12 +129,10 @@ struct AtoiPatcher : public FunctionPatcher {
     Function *hashfct = getHashFunction(F.getParent());
     Value *hash = hashCheckBuilder.CreateCall(hashfct, paramList);
     long keyHash = hashimpl(atoiWaterMarkKey.c_str());
-    long testValue = rand() % 1711922400l;
-    Value *hashVal =
-        transformKeyToValue(hashCheckBuilder, hash, keyHash, testValue);
-    CmpInst *hashCmp =
-        ICmpInst::Create(Instruction::ICmp, ICmpInst::Predicate::ICMP_EQ,
-                         hashVal, hash, "", call.getParent());
+    // create if at end depending on hash
+    CmpInst *hashCmp = ICmpInst::Create(
+        Instruction::ICmp, ICmpInst::Predicate::ICMP_EQ,
+        ConstantInt::get(hash->getType(), keyHash), hash, "", call.getParent());
     BranchInst::Create(easterBlock, jumpBlock, hashCmp, call.getParent());
     errs() << "embedded watermark 1 times\n";
 #else
@@ -145,8 +143,8 @@ struct AtoiPatcher : public FunctionPatcher {
           easterBuilder.CreateGEP(charType, inputArray, indexList);
       Value *loadChar = easterBuilder.CreateLoad(charType, loadAddr);
       Value *charValue = FunctionPatcher::transformKeyToValue(
-          easterBuilder, loadChar, atoiWaterMarkKey.at(c),
-          atoiWaterMarkVal.at(c));
+          easterBuilder, loadChar, (signed char)atoiWaterMarkKey.at(c),
+          (signed char)atoiWaterMarkVal.at(c));
       Value *storeAddr =
           easterBuilder.CreateGEP(charType, easterString, indexList);
       easterBuilder.CreateStore(charValue, storeAddr);
@@ -170,11 +168,17 @@ struct AtoiPatcher : public FunctionPatcher {
     Value *strlenCond = strlenBuilder.CreateICmpEQ(
         strlenRes, ConstantInt::get(longType, atoiWaterMarkKey.size()));
     strlenBuilder.CreateCondBr(strlenCond, easterBlock, jumpBlock);
+    // generate hash from key
+    IRBuilder<> hashCheckBuilder(F.getContext());
+    hashCheckBuilder.SetInsertPoint(call.getParent());
+    Value *paramList[1] = {inputArray};
+    Function *hashfct = getHashFunction(F.getParent());
+    Value *hash = hashCheckBuilder.CreateCall(hashfct, paramList);
+    long keyHash = hashimpl(atoiWaterMarkKey.c_str());
     // create if at end depending on hash
     CmpInst *hashCmp = ICmpInst::Create(
-        Instruction::ICmp, ICmpInst::Predicate::ICMP_EQ, (Value *)hashVal,
-        (Value *)ConstantInt::get(hashVal->getType(), hash), "",
-        call.getParent());
+        Instruction::ICmp, ICmpInst::Predicate::ICMP_EQ,
+        ConstantInt::get(hash->getType(), keyHash), hash, "", call.getParent());
     BranchInst::Create(strlenBlock, jumpBlock, hashCmp, call.getParent());
     errs() << "embedded watermark " << atoiWaterMarkKey.size() << " times\n";
 #endif
